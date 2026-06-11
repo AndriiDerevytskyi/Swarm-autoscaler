@@ -27,7 +27,9 @@ Every `AUTOSCALER_POLL_INTERVAL` seconds:
 swarm-autoscaler/
 ├── main.py                   # entry point
 ├── Dockerfile                # image build (with HEALTHCHECK)
+├── DOCKER_HUB.md             # Docker Hub overview
 ├── .dockerignore
+├── .github/workflows/build.yml  # CI: build + publish to Docker Hub
 ├── requirements.txt          # flask, docker
 ├── docker-compose.yml        # Swarm stack deployment
 ├── prometheus.yml.example    # sample Prometheus scrape config
@@ -48,7 +50,8 @@ swarm-autoscaler/
 │       ├── 001_initial.sql   # tables: events, replica_history, paused_services
 │       ├── 002_pause_timeout.sql  # resume_after column
 │       ├── 003_node_metrics.sql   # agent reports table
-│       └── 004_meta.sql           # key-value store (secrets)
+│       ├── 004_meta.sql           # key-value store (secrets)
+│       └── 005_auth.sql           # users table for web UI auth
 └── web/
     ├── server.py             # Flask REST API + SSE
     ├── static/
@@ -124,16 +127,16 @@ on each node as a standalone container.
 ```yaml
 services:
   autoscaler:
-    # ... manager (full functionality)
+    image: ozzzyad/swarm-autoscaler:latest
     deploy:
       placement: [node.role == manager]
 
-  autoscaler-agent:
-    image: swarm-autoscaler
+  agent:
+    image: ozzzyad/swarm-autoscaler:latest
     environment:
       AUTOSCALER_ROLE: "agent"
       AUTOSCALER_MANAGER_URL: "http://autoscaler:8080"
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
     deploy:
       mode: global
 ```
@@ -186,40 +189,43 @@ services:
 | `AUTOSCALER_LOG_LEVEL` | `INFO` | Log level: `DEBUG` / `INFO` / `WARN` / `ERROR` |
 | `AUTOSCALER_POLL_INTERVAL` | `15` | Service poll interval, seconds |
 | `AUTOSCALER_WEB_PORT` | `8080` | Web UI port |
-| `AUTOSCALER_USER` | — | Login for Basic Auth (web UI) |
-| `AUTOSCALER_HASH_PASSWORD` | — | Password hash (PBKDF2-SHA256 via werkzeug) |
-| `AUTOSCALER_METRICS_USER` | — | Login for `/api/metrics` |
-| `AUTOSCALER_METRICS_HASH_PASSWORD` | — | Password hash for `/api/metrics` |
 | `AUTOSCALER_DEFAULT_MIN_REPLICAS` | `1` | Default min replicas |
 | `AUTOSCALER_DEFAULT_MAX_REPLICAS` | `5` | Default max replicas |
 | `AUTOSCALER_DEFAULT_CPU_THRESHOLD` | `80` | Default CPU threshold, % |
 | `AUTOSCALER_DEFAULT_RAM_THRESHOLD` | `80` | Default RAM threshold, % |
 | `AUTOSCALER_DEFAULT_COOLDOWN` | `5` | Default cooldown, minutes |
 
-> Metrics have independent authentication — you can protect `/api/metrics` with a different
-> password than the web UI, or leave it open for Prometheus.
-
 ---
 
 ## Authentication
 
-Disabled by default. To enable, set both variables of a pair.
+### Web UI
 
-### Generating a Password Hash
+Initially the web UI is **unprotected**. To set up authentication, go to the **About** page
+and fill in the "Security — Setup Authentication" form with a username and password.
+The password hash is stored in SQLite. To change the password later, use the
+"Change Password" form on the same page.
 
-```bash
-docker run --rm swarm-autoscaler \
-  python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('your-password'))"
-```
+### Prometheus Metrics
 
-### Configuration in docker-compose.yml
+By default `/api/metrics` is open. Go to **About → Prometheus Metrics** and click
+"Enable Auth & Generate Password". The generated password is **shown once** — save it
+for your Prometheus config.
+
+You can regenerate the password or disable auth at any time from the same section.
+
+Example Prometheus scrape config with auth:
 
 ```yaml
-environment:
-  AUTOSCALER_USER: "admin"
-  AUTOSCALER_HASH_PASSWORD: "pbkdf2:sha256:260000$..."
-  AUTOSCALER_METRICS_USER: "prometheus"
-  AUTOSCALER_METRICS_HASH_PASSWORD: "pbkdf2:sha256:260000$..."
+scrape_configs:
+  - job_name: 'autoscaler'
+    scrape_interval: 15s
+    metrics_path: '/api/metrics'
+    basic_auth:
+      username: prometheus
+      password: <generated-password>
+    static_configs:
+      - targets: ['swarm-manager:8080']
 ```
 
 ---
@@ -227,8 +233,8 @@ environment:
 ## Build and Deploy
 
 ```bash
-# 1. Build the image
-docker build -t swarm-autoscaler .
+# 1. Download the stack file
+curl -O https://raw.githubusercontent.com/AndriiDerevytskyi/Swarm-autoscaler/refs/heads/main/docker-compose.yml
 
 # 2. Deploy the stack
 docker stack deploy -c docker-compose.yml autoscaler
@@ -238,16 +244,12 @@ docker stack services autoscaler
 docker service logs -f autoscaler_autoscaler
 ```
 
-On successful startup you will see:
+On successful startup you will see (logs are JSON):
 
-```
-2026-06-10 18:00  INFO   ╔══════════════════════════════════════════════════╗
-2026-06-10 18:00  INFO   ║           Docker Swarm Autoscaler                ║
-2026-06-10 18:00  INFO     AUTOSCALER_LOG_LEVEL     = INFO
-2026-06-10 18:00  INFO     AUTOSCALER_POLL_INTERVAL = 15s
-2026-06-10 18:00  INFO     AUTOSCALER_WEB_PORT      = 8080
-2026-06-10 18:00  INFO     Docker socket /var/run/docker.sock  [OK, rw]
-2026-06-10 18:00  INFO     Web UI started at http://0.0.0.0:8080
+```json
+{"time": "2026-06-10T18:00:00Z", "level": "INFO", "message": "Docker socket /var/run/docker.sock  [OK, rw]"}
+{"time": "2026-06-10T18:00:00Z", "level": "INFO", "message": "Web UI started at http://0.0.0.0:8080"}
+{"time": "2026-06-10T18:00:15Z", "level": "INFO", "message": "my-app: SCALE UP  1 -> 2  (cpu=87.3% mem=45.1%)"}
 ```
 
 ---
@@ -273,7 +275,8 @@ Data stored in SQLite, persists across restarts.
 Clear events button (all or per-service).
 
 ### About
-Runtime parameters and label reference.
+Runtime parameters, label reference, and security: set up web UI authentication,
+enable/disable Prometheus metrics auth with auto-generated passwords.
 
 > Zero external CDN dependencies, fully offline-capable. Data updates in real time
 > via **Server-Sent Events (SSE)** — no periodic polling.
@@ -293,6 +296,13 @@ Runtime parameters and label reference.
 | `POST` | `/api/services/<name>/scale` | Set replicas `{"replicas": N}` | Basic |
 | `POST` | `/api/services/<name>/pause` | Pause `{"duration": 5}` (min, 0=forever) | Basic |
 | `POST` | `/api/services/<name>/resume` | Resume autoscaling | Basic |
+| `GET` | `/api/auth/status` | Check if web UI auth is configured | — |
+| `POST` | `/api/auth/setup` | Set up credentials (first time only) | — |
+| `POST` | `/api/auth/change` | Change password | Basic |
+| `GET` | `/api/metrics/auth/status` | Metrics auth state | Basic |
+| `POST` | `/api/metrics/auth/enable` | Enable + generate password | Basic |
+| `POST` | `/api/metrics/auth/disable` | Disable metrics auth | Basic |
+| `POST` | `/api/metrics/auth/regenerate` | Regenerate metrics password | Basic |
 | `GET` | `/api/services/<name>/history?minutes=60` | Replica history for sparklines | Basic |
 | `GET` | `/api/stream` | SSE real-time stream | — |
 | `GET` | `/api/metrics` | Prometheus metrics | Metrics |
@@ -325,7 +335,7 @@ Copy `prometheus.yml.example` into your Prometheus config. Supported discovery m
 - **dns_sd_configs** — Swarm with multiple replicas
 - **file_sd_configs** — dynamic targets
 
-Sample Prometheus scrape config with Basic Auth:
+Sample Prometheus scrape config (use the password generated in the About page):
 
 ```yaml
 scrape_configs:
@@ -334,7 +344,7 @@ scrape_configs:
     metrics_path: '/api/metrics'
     basic_auth:
       username: prometheus
-      password: your-password
+      password: <generated-password>
     static_configs:
       - targets: ['swarm-manager:8080']
 ```
@@ -366,6 +376,8 @@ Variables: `$datasource`, `$instance` (multi-select), `$service` (multi-select) 
 ---
 
 ## Log Levels
+
+All logs are JSON with fields `time`, `level`, `message`.
 
 | Level | What is logged |
 |---------|-----------|

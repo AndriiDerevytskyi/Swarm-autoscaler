@@ -5,10 +5,6 @@ from core.logging import LOG_LEVEL, log
 
 POLL_INTERVAL = int(os.getenv("AUTOSCALER_POLL_INTERVAL", "15"))
 WEB_PORT      = int(os.getenv("AUTOSCALER_WEB_PORT",      "8080"))
-AUTH_USER     = os.getenv("AUTOSCALER_USER",          "")
-AUTH_HASH     = os.getenv("AUTOSCALER_HASH_PASSWORD", "")
-METRICS_USER  = os.getenv("AUTOSCALER_METRICS_USER",       "")
-METRICS_HASH  = os.getenv("AUTOSCALER_METRICS_HASH_PASSWORD", "")
 
 LABEL_DEFAULTS = {
     "swarm.autoscaler.min_replicas":  os.getenv("AUTOSCALER_DEFAULT_MIN_REPLICAS",  "1"),

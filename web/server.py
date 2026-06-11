@@ -12,9 +12,14 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from werkzeug.security import check_password_hash
 
 from core.database import (
+    auth_is_configured,
+    auth_set_password,
+    auth_verify,
     clear_events,
     get_events,
     get_replica_history,
+    meta_get,
+    meta_set,
     pause_service,
     record_event,
     record_node_metrics,
@@ -44,10 +49,6 @@ def setup(
     poll_interval: int,
     web_port: int,
     label_defaults: dict,
-    auth_user: str = "",
-    auth_hash: str = "",
-    metrics_user: str = "",
-    metrics_hash: str = "",
     agent_secret: str = "",
 ) -> None:
     global _config
@@ -56,10 +57,6 @@ def setup(
         "poll_interval":  poll_interval,
         "web_port":       web_port,
         "label_defaults": label_defaults,
-        "_auth_user":    auth_user,
-        "_auth_hash":    auth_hash,
-        "_metrics_user": metrics_user,
-        "_metrics_hash": metrics_hash,
         "_agent_secret": agent_secret,
     }
 
@@ -144,27 +141,15 @@ def stream():
 
 @app.before_request
 def _require_auth():
-    if request.path == "/api/stream":
-        return
-
-    if request.path == "/api/health":
-        return
-
-    if request.path == "/api/agent/report":
+    if request.path in ("/api/stream", "/api/health", "/api/agent/report",
+                         "/api/auth/status", "/api/auth/setup"):
         return
 
     if request.path == "/api/metrics":
-        user  = _config.get("_metrics_user", "")
-        phash = _config.get("_metrics_hash", "")
-        if not user or not phash:
-            return
-
+        if not _metrics_enabled():
+            return Response("", 404)
         auth = request.authorization
-        if (
-            not auth
-            or auth.username != user
-            or not check_password_hash(phash, auth.password)
-        ):
+        if not auth or auth.username != _metrics_username() or not _metrics_verify(auth.password):
             return Response(
                 "Authentication required",
                 401,
@@ -172,17 +157,11 @@ def _require_auth():
             )
         return
 
-    user  = _config.get("_auth_user", "")
-    phash = _config.get("_auth_hash", "")
-    if not user or not phash:
+    if not auth_is_configured():
         return
 
     auth = request.authorization
-    if (
-        not auth
-        or auth.username != user
-        or not check_password_hash(phash, auth.password)
-    ):
+    if not auth or not auth_verify(auth.username, auth.password):
         return Response(
             "Authentication required",
             401,
@@ -210,6 +189,24 @@ def _serial(d: dict) -> dict:
     return out
 
 
+# ── metrics auth helpers ──────────────────────────────────────────────────
+
+def _metrics_enabled() -> bool:
+    return meta_get("metrics_enabled") == "1"
+
+def _metrics_username() -> str:
+    return meta_get("metrics_user")
+
+def _metrics_password_hash() -> str:
+    return meta_get("metrics_password_hash")
+
+def _metrics_verify(password: str) -> bool:
+    phash = _metrics_password_hash()
+    if not phash:
+        return False
+    return check_password_hash(phash, password)
+
+
 # ── routes ────────────────────────────────────────────────────────────────
 
 @app.route("/", defaults={"path": ""})
@@ -221,6 +218,89 @@ def spa(path: str = ""):
 @app.get("/api/health")
 def health():
     return jsonify({"ok": _docker_ok})
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    return jsonify({"configured": auth_is_configured()})
+
+
+@app.post("/api/auth/setup")
+def auth_setup():
+    if auth_is_configured():
+        return jsonify({"ok": False, "error": "already configured"}), 409
+
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+    if not username or not password:
+        return jsonify({"ok": False, "error": "username and password required"}), 400
+    if len(password) < 4:
+        return jsonify({"ok": False, "error": "password must be at least 4 characters"}), 400
+
+    auth_set_password(username, password)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/auth/change")
+def auth_change():
+    if not auth_is_configured():
+        return jsonify({"ok": False, "error": "no user configured"}), 400
+
+    data = request.get_json(silent=True) or {}
+    current  = (data.get("current_password") or "").strip()
+    new_pass = (data.get("new_password") or "").strip()
+    if not current or not new_pass:
+        return jsonify({"ok": False, "error": "current and new password required"}), 400
+    if len(new_pass) < 4:
+        return jsonify({"ok": False, "error": "password must be at least 4 characters"}), 400
+
+    auth = request.authorization
+    if not auth or not auth_verify(auth.username, current):
+        return jsonify({"ok": False, "error": "current password is incorrect"}), 403
+
+    auth_set_password(auth.username, new_pass)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/metrics/auth/status")
+def metrics_auth_status():
+    enabled = _metrics_enabled()
+    return jsonify({
+        "enabled":  enabled,
+        "username": _metrics_username() if enabled else "",
+    })
+
+
+@app.post("/api/metrics/auth/enable")
+def metrics_auth_enable():
+    import secrets
+    user = (request.get_json(silent=True) or {}).get("username", "prometheus").strip() or "prometheus"
+    password = secrets.token_hex(16)
+    from werkzeug.security import generate_password_hash
+    phash = generate_password_hash(password)
+    meta_set("metrics_enabled", "1")
+    meta_set("metrics_user", user)
+    meta_set("metrics_password_hash", phash)
+    return jsonify({"ok": True, "username": user, "password": password})
+
+
+@app.post("/api/metrics/auth/disable")
+def metrics_auth_disable():
+    meta_set("metrics_enabled", "0")
+    return jsonify({"ok": True})
+
+
+@app.post("/api/metrics/auth/regenerate")
+def metrics_auth_regenerate():
+    if not _metrics_enabled():
+        return jsonify({"ok": False, "error": "metrics auth not enabled"}), 400
+    import secrets
+    password = secrets.token_hex(16)
+    from werkzeug.security import generate_password_hash
+    phash = generate_password_hash(password)
+    meta_set("metrics_password_hash", phash)
+    return jsonify({"ok": True, "username": _metrics_username(), "password": password})
 
 
 @app.post("/api/agent/report")

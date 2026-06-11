@@ -8,8 +8,8 @@ Two modes: **manager** (decision-making, web UI) and **agent** (per-node metrics
 ## Quick Start
 
 ```bash
-docker build -t swarm-autoscaler .
-docker stack deploy -c stack.yml autoscaler
+curl -O https://raw.githubusercontent.com/AndriiDerevytskyi/Swarm-autoscaler/refs/heads/main/docker-compose.yml
+docker stack deploy -c docker-compose.yml autoscaler
 ```
 
 ---
@@ -20,7 +20,7 @@ docker stack deploy -c stack.yml autoscaler
 # stack.yml
 services:
   autoscaler:
-    image: swarm-autoscaler
+    image: ozzzyad/swarm-autoscaler:latest
     environment:
       AUTOSCALER_LOG_LEVEL: "INFO"
       AUTOSCALER_POLL_INTERVAL: "15"
@@ -41,8 +41,8 @@ services:
       restart_policy:
         condition: on-failure
 
-  autoscaler-agent:
-    image: swarm-autoscaler
+  agent:
+    image: ozzzyad/swarm-autoscaler:latest
     environment:
       AUTOSCALER_ROLE: "agent"
       AUTOSCALER_MANAGER_URL: "http://autoscaler:8080"
@@ -110,10 +110,6 @@ The service must also have `deploy.resources.limits` set — CPU/RAM percentages
 | `AUTOSCALER_WEB_PORT` | `8080` | manager | Web UI port |
 | `AUTOSCALER_MANAGER_URL` | `http://autoscaler:8080` | agent | Where to send metrics |
 | `AUTOSCALER_NODE_NAME` | hostname | agent | Node identifier in reports |
-| `AUTOSCALER_USER` | — | manager | Basic Auth login for web UI |
-| `AUTOSCALER_HASH_PASSWORD` | — | manager | PBKDF2-SHA256 password hash |
-| `AUTOSCALER_METRICS_USER` | — | manager | Login for `/api/metrics` |
-| `AUTOSCALER_METRICS_HASH_PASSWORD` | — | manager | Password hash for `/api/metrics` |
 | `AUTOSCALER_DEFAULT_MIN_REPLICAS` | `1` | manager | Default min |
 | `AUTOSCALER_DEFAULT_MAX_REPLICAS` | `5` | manager | Default max |
 | `AUTOSCALER_DEFAULT_CPU_THRESHOLD` | `80` | manager | Default CPU threshold, % |
@@ -122,22 +118,30 @@ The service must also have `deploy.resources.limits` set — CPU/RAM percentages
 
 ---
 
-## Generating a Password Hash
+## Authentication
 
-```bash
-docker run --rm swarm-autoscaler \
-  python -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('your-password'))"
-```
+### Web UI
 
-Example auth configuration:
+The web UI starts unprotected. Set up credentials via **About → Security — Setup Authentication**.
+The password is stored as a PBKDF2 hash in SQLite. Use **Change Password** to update it.
+
+### Prometheus Metrics
+
+By default open. Go to **About → Prometheus Metrics** → "Enable Auth & Generate Password".
+The password is **shown once** — copy it for your Prometheus config.
+You can regenerate or disable at any time.
+
+Example Prometheus scrape config:
 
 ```yaml
-environment:
-  AUTOSCALER_USER: "admin"
-  AUTOSCALER_HASH_PASSWORD: "pbkdf2:sha256:260000$..."
+scrape_configs:
+  - job_name: 'autoscaler'
+    basic_auth:
+      username: prometheus
+      password: <generated-password>
+    static_configs:
+      - targets: ['manager-ip:8080']
 ```
-
-If both variables are unset, the web interface is unprotected.
 
 ---
 
@@ -156,14 +160,17 @@ Dark/light theme. Real-time updates via SSE.
 
 ### Prometheus
 
+Enable auth via **About → Prometheus Metrics → Enable Auth & Generate Password**.
+Use the generated password in your scrape config:
+
 ```yaml
 scrape_configs:
   - job_name: 'autoscaler'
     scrape_interval: 15s
     metrics_path: '/api/metrics'
     basic_auth:
-      username: metrics
-      password: your-password
+      username: prometheus
+      password: <generated-password>
     static_configs:
       - targets: ['manager-ip:8080']
 ```
@@ -210,7 +217,7 @@ collects metrics directly:
 ```yaml
 services:
   autoscaler:
-    image: swarm-autoscaler
+    image: ozzzyad/swarm-autoscaler:latest
     ports: ["8080:8080"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

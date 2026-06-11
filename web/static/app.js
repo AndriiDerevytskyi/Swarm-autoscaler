@@ -35,6 +35,8 @@ let _sortBy      = 'name';
 let _sortDir     = 'asc';
 let _search      = '';
 let _theme       = localStorage.getItem('autoscaler-theme') || 'dark';
+let _authOk       = false;
+let _metricsAuth   = { enabled: false, username: '' };
 
 // ── Theme ─────────────────────────────────────────────────────────────────
 function applyTheme() {
@@ -96,6 +98,46 @@ const api = {
   async clearEvents(service = '') {
     const params = service ? `?service=${encodeURIComponent(service)}` : '';
     const r = await fetch(`/api/events${params}`, { method: 'DELETE' });
+    return r.json();
+  },
+  async authStatus() {
+    const r = await fetch('/api/auth/status');
+    return r.json();
+  },
+  async authSetup(username, password) {
+    const r = await fetch('/api/auth/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    return r.json();
+  },
+  async authChange(current, newPw) {
+    const r = await fetch('/api/auth/change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: current, new_password: newPw }),
+    });
+    return r.json();
+  },
+  async metricsAuthStatus() {
+    const r = await fetch('/api/metrics/auth/status');
+    return r.json();
+  },
+  async metricsAuthEnable(username) {
+    const r = await fetch('/api/metrics/auth/enable', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username }),
+    });
+    return r.json();
+  },
+  async metricsAuthDisable() {
+    const r = await fetch('/api/metrics/auth/disable', { method: 'POST' });
+    return r.json();
+  },
+  async metricsAuthRegenerate() {
+    const r = await fetch('/api/metrics/auth/regenerate', { method: 'POST' });
     return r.json();
   },
 };
@@ -403,6 +445,89 @@ window.filterEvents = function () {
   fetchEvents();
 };
 
+// ── Auth ───────────────────────────────────────────────────────────────────
+window.authDoSetup = async function () {
+  const u = document.getElementById('setup-user')?.value.trim();
+  const p = document.getElementById('setup-pass')?.value.trim();
+  if (!u || !p) { toast('Username and password required', false); return; }
+  if (p.length < 4) { toast('Password must be at least 4 characters', false); return; }
+  try {
+    const res = await api.authSetup(u, p);
+    if (res.ok) {
+      toast('Authentication configured. You will be prompted to log in on the next request.');
+      _authOk = true;
+      await checkAuth();
+    } else {
+      toast(res.error || 'Setup failed', false);
+    }
+  } catch (e) { toast(`Error: ${e.message}`, false); }
+};
+
+window.authDoChange = async function () {
+  const cur = document.getElementById('change-cur')?.value.trim();
+  const p1  = document.getElementById('change-new1')?.value.trim();
+  const p2  = document.getElementById('change-new2')?.value.trim();
+  if (!cur || !p1 || !p2) { toast('All fields required', false); return; }
+  if (p1 !== p2) { toast('Passwords do not match', false); return; }
+  if (p1.length < 4) { toast('Password must be at least 4 characters', false); return; }
+  try {
+    const res = await api.authChange(cur, p1);
+    if (res.ok) {
+      toast('Password changed');
+      document.getElementById('change-cur').value = '';
+      document.getElementById('change-new1').value = '';
+      document.getElementById('change-new2').value = '';
+    } else {
+      toast(res.error || 'Change failed', false);
+    }
+  } catch (e) { toast(`Error: ${e.message}`, false); }
+};
+
+async function checkAuth() {
+  try { const s = await api.authStatus(); _authOk = s.configured; } catch (_) {}
+  try { _metricsAuth = await api.metricsAuthStatus(); } catch (_) {}
+  if (curPage() === 'about') renderPage();
+}
+
+window.metricsEnable = async function () {
+  const u = document.getElementById('metrics-user')?.value.trim() || 'prometheus';
+  try {
+    const res = await api.metricsAuthEnable(u);
+    if (res.ok) {
+      document.getElementById('metrics-creds').innerHTML =
+        `<div style="color:var(--green);font-size:12px;margin-top:4px"><strong>Save these credentials — the password is shown only once:</strong></div>
+         <div class="mono" style="margin-top:4px;font-size:12px">Username: ${esc(res.username)}</div>
+         <div class="mono" style="font-size:12px">Password: <span style="color:var(--accent)">${esc(res.password)}</span></div>`;
+      _metricsAuth = { enabled: true, username: res.username };
+      renderPage();
+    } else { toast(res.error || 'Failed', false); }
+  } catch (e) { toast(`Error: ${e.message}`, false); }
+};
+
+window.metricsDisable = async function () {
+  try {
+    const res = await api.metricsAuthDisable();
+    if (res.ok) {
+      toast('Metrics endpoint is now open (no auth)');
+      _metricsAuth = { enabled: false, username: '' };
+      renderPage();
+    } else { toast(res.error || 'Failed', false); }
+  } catch (e) { toast(`Error: ${e.message}`, false); }
+};
+
+window.metricsRegen = async function () {
+  try {
+    const res = await api.metricsAuthRegenerate();
+    if (res.ok) {
+      document.getElementById('metrics-creds').innerHTML =
+        `<div style="color:var(--green);font-size:12px;margin-top:4px"><strong>New password — save it, shown only once:</strong></div>
+         <div class="mono" style="margin-top:4px;font-size:12px">Username: ${esc(res.username)}</div>
+         <div class="mono" style="font-size:12px">Password: <span style="color:var(--accent)">${esc(res.password)}</span></div>`;
+      toast('Password regenerated');
+    } else { toast(res.error || 'Failed', false); }
+  } catch (e) { toast(`Error: ${e.message}`, false); }
+};
+
 // ── Pages ─────────────────────────────────────────────────────────────────
 function pageDashboard() {
   const filtered = _search ? _svcs.filter(s => s.name.toLowerCase().includes(_search.toLowerCase())) : _svcs;
@@ -550,12 +675,65 @@ function pageAbout() {
   const row = (k, v) =>
     `<div class="info-row"><span class="info-key">${esc(k)}</span><span class="info-val">${esc(v)}</span></div>`;
 
+  let authSection = '';
+  if (!_authOk) {
+    authSection = `
+  <div class="info-block">
+    <div class="info-head">Security — Setup Authentication</div>
+    <div style="color:var(--amber);font-size:12px;margin-bottom:12px">Authentication is not configured — the web UI is publicly accessible.</div>
+    <div class="auth-form">
+      <input class="search-input" id="setup-user" type="text" placeholder="Username" style="margin-bottom:6px;max-width:240px">
+      <input class="search-input" id="setup-pass" type="password" placeholder="Password" style="margin-bottom:8px;max-width:240px">
+      <button class="btn btn-primary" onclick="authDoSetup()">Set Credentials</button>
+    </div>
+  </div>`;
+  } else {
+    authSection = `
+  <div class="info-block">
+    <div class="info-head">Security — Change Password</div>
+    <div class="auth-form">
+      <input class="search-input" id="change-cur" type="password" placeholder="Current password" style="margin-bottom:6px;max-width:260px">
+      <input class="search-input" id="change-new1" type="password" placeholder="New password" style="margin-bottom:6px;max-width:260px">
+      <input class="search-input" id="change-new2" type="password" placeholder="Confirm new password" style="margin-bottom:8px;max-width:260px">
+      <button class="btn btn-primary" onclick="authDoChange()">Change Password</button>
+    </div>
+  </div>`;
+  }
+
+  let metricsSection;
+  if (_metricsAuth.enabled) {
+    metricsSection = `
+  <div class="info-block">
+    <div class="info-head">Prometheus Metrics — Enabled</div>
+    <div style="font-size:12px;color:var(--text-2);margin-bottom:10px">
+      Metrics are protected with Basic Auth. Username: <span class="mono">${esc(_metricsAuth.username)}</span>
+    </div>
+    <div id="metrics-creds"></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn-pause" onclick="metricsRegen()" style="border-color:var(--accent);color:var(--accent)">Regenerate Password</button>
+      <button class="btn-pause" onclick="metricsDisable()" style="border-color:var(--red);color:var(--red)">Disable Auth</button>
+    </div>
+  </div>`;
+  } else {
+    metricsSection = `
+  <div class="info-block">
+    <div class="info-head">Prometheus Metrics — Open</div>
+    <div style="color:var(--amber);font-size:12px;margin-bottom:12px">Metrics endpoint (/api/metrics) is publicly accessible with no authentication.</div>
+    <div class="auth-form">
+      <input class="search-input" id="metrics-user" type="text" placeholder="Username (default: prometheus)" value="prometheus" style="margin-bottom:8px;max-width:240px">
+      <button class="btn btn-primary" onclick="metricsEnable()">Enable Auth &amp; Generate Password</button>
+    </div>
+  </div>`;
+  }
+
   return dockerBanner() + `
 <div class="page-header">
   <div><div class="page-title">About</div>
        <div class="page-sub">Runtime parameters and label reference</div></div>
 </div>
 <div class="page-body">
+  ${authSection}
+  ${metricsSection}
   <div class="info-block">
     <div class="info-head">Runtime configuration</div>
     ${row('AUTOSCALER_LOG_LEVEL',    _cfg.log_level    ?? '—')}
@@ -665,6 +843,7 @@ function connectSSE() {
   document.getElementById('page').innerHTML =
     '<div class="spinner-wrap"><div class="spinner"></div></div>';
   try { _cfg = await api.config(); } catch (_) {}
+  await checkAuth();
   await refresh();
   connectSSE();
 })();

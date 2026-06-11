@@ -232,3 +232,36 @@ def meta_set(key: str, value: str) -> None:
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
         )
         conn.commit()
+
+
+# ── Auth ─────────────────────────────────────────────────────────────────────
+
+def auth_is_configured() -> bool:
+    conn = _get_conn()
+    with _lock:
+        row = conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
+    return row is not None
+
+
+def auth_verify(username: str, password: str) -> bool:
+    from werkzeug.security import check_password_hash
+    conn = _get_conn()
+    with _lock:
+        row = conn.execute(
+            "SELECT password_hash FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    if not row:
+        return False
+    return check_password_hash(row["password_hash"], password)
+
+
+def auth_set_password(username: str, password: str) -> None:
+    from werkzeug.security import generate_password_hash
+    phash = generate_password_hash(password)
+    conn = _get_conn()
+    with _lock:
+        conn.execute(
+            "INSERT OR REPLACE INTO users (username, password_hash) VALUES (?, ?)",
+            (username, phash),
+        )
+        conn.commit()

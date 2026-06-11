@@ -9,12 +9,8 @@ import docker
 from docker.errors import APIError, DockerException
 
 from core.config import (
-    AUTH_HASH,
-    AUTH_USER,
     LABEL_DEFAULTS,
     LOG_LEVEL,
-    METRICS_HASH,
-    METRICS_USER,
     POLL_INTERVAL,
     WEB_PORT,
     parse_config,
@@ -46,10 +42,6 @@ def _banner() -> None:
         f"    AUTOSCALER_LOG_LEVEL     = {LOG_LEVEL}\n"
         f"    AUTOSCALER_POLL_INTERVAL = {POLL_INTERVAL}s\n"
         f"    AUTOSCALER_WEB_PORT      = {WEB_PORT}\n"
-        f"    AUTOSCALER_USER          = {AUTH_USER if AUTH_USER else 'not set'}\n"
-        f"    AUTOSCALER_HASH_PASSWORD = {'*' * 8 if AUTH_HASH else 'not set'}\n"
-        f"    AUTOSCALER_METRICS_USER   = {METRICS_USER if METRICS_USER else 'not set'}\n"
-        f"    AUTOSCALER_METRICS_HASH   = {'*' * 8 if METRICS_HASH else 'not set'}\n"
         f"    AUTOSCALER_AGENT_SECRET   = {'*' * 8} (persisted in DB)\n"
         "  Service label defaults (override per service):\n"
         f"    swarm.autoscaler.min_replicas  = {LABEL_DEFAULTS['swarm.autoscaler.min_replicas']}\n"
@@ -99,19 +91,6 @@ def _gather_stats(client, service_name: str) -> tuple:
 def main() -> None:
     _banner()
 
-    if not AUTH_USER or not AUTH_HASH:
-        log.warning(
-            "Web UI authentication is DISABLED – anyone with network access can use the interface. "
-            "To enable, set AUTOSCALER_USER and AUTOSCALER_HASH_PASSWORD "
-            "(see README.md for hash generation instructions)"
-        )
-
-    if bool(METRICS_USER) != bool(METRICS_HASH):
-        log.warning(
-            "Metrics authentication is partially configured – both AUTOSCALER_METRICS_USER and "
-            "AUTOSCALER_METRICS_HASH_PASSWORD must be set to enable. Metrics endpoint is unprotected."
-        )
-
     _check_socket()
 
     run_migrations()
@@ -129,8 +108,6 @@ def main() -> None:
         raise SystemExit(1)
 
     web.setup(LOG_LEVEL, POLL_INTERVAL, WEB_PORT, LABEL_DEFAULTS,
-              auth_user=AUTH_USER, auth_hash=AUTH_HASH,
-              metrics_user=METRICS_USER, metrics_hash=METRICS_HASH,
               agent_secret=agent_secret)
     t = threading.Thread(target=web.start, kwargs={"port": WEB_PORT}, daemon=True)
     t.start()

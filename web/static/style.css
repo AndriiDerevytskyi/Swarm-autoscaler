@@ -870,3 +870,13 @@ th .sort-arrow.active { opacity: 1; color: var(--accent); }
 }
 
 .docker-down-banner svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+/* ── Auth forms ── */
+.auth-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.auth-form input {
+  display: block;
+}
