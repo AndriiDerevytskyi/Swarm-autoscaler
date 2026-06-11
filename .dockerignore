@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+.idea/
+.claude/
+.git/
+*.md
+docker-compose.yml

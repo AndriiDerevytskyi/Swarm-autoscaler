@@ -1,0 +1,118 @@
+services:
+  whoami:
+    image: traefik/whoami
+    networks:
+      - traefik
+    expose:
+      - 80
+    deploy:
+      mode: replicated
+      replicas: 1
+      resources:
+        limits:
+          memory: 32M
+          cpus: '0.2'
+        reservations:
+          cpus: '0.1'
+          memory: 16M
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == worker
+      labels:
+        # Autoscaler configuration
+        - "swarm.autoscaler.enable=true"
+        - "swarm.autoscaler.min_replicas=1"
+        - "swarm.autoscaler.max_replicas=5"
+        - "swarm.autoscaler.cpu.threshold=70"
+        - "swarm.autoscaler.ram.threshold=70"
+        - "swarm.autoscaler.cooldown=5"
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  autoscaler:
+    image: swarm-autoscaler
+    environment:
+      AUTOSCALER_LOG_LEVEL: "INFO"       # DEBUG | INFO | WARN | ERROR
+      AUTOSCALER_POLL_INTERVAL: "15"     # poll interval, seconds
+      AUTOSCALER_WEB_PORT: "8080"        # web UI port
+      # Default thresholds for services without explicit labels
+      # AUTOSCALER_DEFAULT_MIN_REPLICAS: "1"
+      # AUTOSCALER_DEFAULT_MAX_REPLICAS: "5"
+      # AUTOSCALER_DEFAULT_CPU_THRESHOLD: "80"   # %
+      # AUTOSCALER_DEFAULT_RAM_THRESHOLD: "80"   # %
+      # AUTOSCALER_DEFAULT_COOLDOWN: "5"          # minutes
+      # Web UI authentication (see README.md for hash generation)
+      # AUTOSCALER_USER: "admin"
+      # AUTOSCALER_HASH_PASSWORD: ""
+      # Separate authentication for /api/metrics (Prometheus)
+      # AUTOSCALER_METRICS_USER: "metrics"
+      # AUTOSCALER_METRICS_HASH_PASSWORD: ""
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - autoscaler_data:/app/data
+    networks:
+      - traefik
+      - autoscaler
+    deploy:
+      mode: replicated
+      replicas: 1
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.5'
+        reservations:
+          cpus: '0.1'
+          memory: 64M
+      restart_policy:
+        condition: on-failure
+      placement:
+        constraints:
+          - node.role == manager
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  autoscaler-agent:
+    image: swarm-autoscaler
+    environment:
+      AUTOSCALER_ROLE: "agent"
+      AUTOSCALER_MANAGER_URL: "http://autoscaler:8080"
+      AUTOSCALER_POLL_INTERVAL: "15"
+      AUTOSCALER_LOG_LEVEL: "INFO"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - autoscaler
+    deploy:
+      mode: global
+      resources:
+        limits:
+          memory: 64M
+          cpus: '0.2'
+        reservations:
+          cpus: '0.05'
+          memory: 32M
+      restart_policy:
+        condition: on-failure
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  traefik:
+    external: true
+  autoscaler:
+    driver: overlay
+    attachable: true
+    internal: true
+
+volumes:
+  autoscaler_data:

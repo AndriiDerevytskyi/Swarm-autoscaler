@@ -1,0 +1,558 @@
+{
+  "title": "Swarm Autoscaler",
+  "description": "Real-time monitoring dashboard for Docker Swarm Autoscaler — CPU, RAM, replica counts, and scaling events across all managed services.",
+  "tags": ["docker", "swarm", "autoscaler", "autoscaling"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "10s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "label": "Prometheus"
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "query": "label_values(autoscaler_docker_ok, instance)",
+        "datasource": "$datasource",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {},
+        "label": "Instance",
+        "definition": "label_values(autoscaler_docker_ok, instance)"
+      },
+      {
+        "name": "service",
+        "type": "query",
+        "query": "label_values(autoscaler_replicas{instance=~\"$instance\"}, service)",
+        "datasource": "$datasource",
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {},
+        "label": "Service",
+        "definition": "label_values(autoscaler_replicas{instance=~\"$instance\"}, service)"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Overview",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 }
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Docker API",
+      "gridPos": { "x": 0, "y": 1, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "value": "1", "text": "OK" },
+            { "type": "value", "value": "0", "text": "DOWN" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          },
+          "color": { "mode": "thresholds" },
+          "unit": "none"
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "graphMode": "none",
+        "textMode": "auto",
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "expr": "autoscaler_docker_ok{instance=~\"$instance\"}",
+          "datasource": "$datasource",
+          "legendFormat": "API"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Managed Services",
+      "gridPos": { "x": 6, "y": 1, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+          "color": { "mode": "thresholds" },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "graphMode": "none",
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "count(count by (service) (autoscaler_replicas{instance=~\"$instance\", service=~\"$service\"}))",
+          "datasource": "$datasource",
+          "legendFormat": "Services"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total Replicas",
+      "gridPos": { "x": 10, "y": 1, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] },
+          "color": { "mode": "thresholds" },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "graphMode": "none",
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "sum(autoscaler_replicas{instance=~\"$instance\", service=~\"$service\"})",
+          "datasource": "$datasource",
+          "legendFormat": "Replicas"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Paused",
+      "gridPos": { "x": 14, "y": 1, "w": 4, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "value": "0", "text": "None" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
+            ]
+          },
+          "color": { "mode": "thresholds" },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "graphMode": "none",
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "sum(autoscaler_paused{instance=~\"$instance\", service=~\"$service\"})",
+          "datasource": "$datasource",
+          "legendFormat": "Paused"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Overloaded",
+      "gridPos": { "x": 18, "y": 1, "w": 6, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "value": "0", "text": "None" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          },
+          "color": { "mode": "thresholds" },
+          "unit": "short"
+        }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "graphMode": "none",
+        "textMode": "auto",
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "count(autoscaler_cpu_pct{instance=~\"$instance\", service=~\"$service\"} >= on(service) autoscaler_cpu_threshold{instance=~\"$instance\", service=~\"$service\"}) or vector(0)",
+          "datasource": "$datasource",
+          "legendFormat": "Overloaded"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "CPU & Memory",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "CPU Usage %",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 8,
+            "lineWidth": 1,
+            "spanNulls": true,
+            "showPoints": "never"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["lastNotNull", "mean", "max"],
+          "sortBy": "Last *",
+          "sortDesc": true
+        }
+      },
+      "targets": [
+        {
+          "expr": "autoscaler_cpu_pct{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "legendFormat": "{{service}} CPU"
+        },
+        {
+          "expr": "autoscaler_cpu_threshold{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "legendFormat": "{{service}} threshold",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Memory Usage %",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 8,
+            "lineWidth": 1,
+            "spanNulls": true,
+            "showPoints": "never"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 70 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["lastNotNull", "mean", "max"],
+          "sortBy": "Last *",
+          "sortDesc": true
+        }
+      },
+      "targets": [
+        {
+          "expr": "autoscaler_mem_pct{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "legendFormat": "{{service}} RAM"
+        },
+        {
+          "expr": "autoscaler_ram_threshold{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "legendFormat": "{{service}} threshold",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Replicas",
+      "gridPos": { "x": 0, "y": 14, "w": 24, "h": 1 }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Replica Count",
+      "gridPos": { "x": 0, "y": 15, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "showPoints": "never",
+            "lineInterpolation": "stepAfter",
+            "staircase": true
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": ["lastNotNull", "min", "max"],
+          "sortBy": "Last *",
+          "sortDesc": true
+        }
+      },
+      "targets": [
+        {
+          "expr": "autoscaler_replicas{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Current State",
+      "gridPos": { "x": 0, "y": 23, "w": 24, "h": 1 }
+    },
+    {
+      "id": 30,
+      "type": "table",
+      "title": "Services Overview",
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "CPU %" },         "properties": [{ "id": "unit", "value": "percent" },        { "id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"} }] },
+          { "matcher": { "id": "byName", "options": "RAM %" },         "properties": [{ "id": "unit", "value": "percent" },        { "id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"} }] },
+          { "matcher": { "id": "byName", "options": "CPU Thres." },    "properties": [{ "id": "unit", "value": "percent" }] },
+          { "matcher": { "id": "byName", "options": "RAM Thres." },    "properties": [{ "id": "unit", "value": "percent" }] },
+          { "matcher": { "id": "byName", "options": "Paused" },        "properties": [{ "id": "mappings", "value": [{"type":"value","value":"0","text":"No"},{"type":"value","value":"1","text":"YES"}] }, { "id": "custom.cellOptions", "value": {"type": "color-background"} }] },
+          { "matcher": { "id": "byName", "options": "Overloaded" },    "properties": [{ "id": "mappings", "value": [{"type":"value","value":"0","text":"OK"},{"type":"value","value":"1","text":"OVERLOADED"}] }, { "id": "custom.cellOptions", "value": {"type": "color-background"} }] }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "CPU %", "desc": true }]
+      },
+      "targets": [
+        {
+          "expr": "autoscaler_replicas{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "Replicas"
+        },
+        {
+          "expr": "autoscaler_cpu_pct{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "CPU %",
+          "refId": "B"
+        },
+        {
+          "expr": "autoscaler_cpu_threshold{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "CPU Thres.",
+          "refId": "C"
+        },
+        {
+          "expr": "autoscaler_mem_pct{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "RAM %",
+          "refId": "D"
+        },
+        {
+          "expr": "autoscaler_ram_threshold{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "RAM Thres.",
+          "refId": "E"
+        },
+        {
+          "expr": "autoscaler_paused{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "Paused",
+          "refId": "F"
+        },
+        {
+          "expr": "autoscaler_cpu_pct{instance=~\"$instance\", service=~\"$service\"} >= on(service) autoscaler_cpu_threshold{instance=~\"$instance\", service=~\"$service\"} or autoscaler_mem_pct{instance=~\"$instance\", service=~\"$service\"} >= on(service) autoscaler_ram_threshold{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "Overloaded",
+          "refId": "G"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "instance": true, "job": true, "__name__": true },
+            "renameByName": {
+              "service": "Service",
+              "Value #Replicas": "Replicas",
+              "Value #CPU %": "CPU %",
+              "Value #CPU Thres.": "CPU Thres.",
+              "Value #RAM %": "RAM %",
+              "Value #RAM Thres.": "RAM Thres.",
+              "Value #Paused": "Paused",
+              "Value #Overloaded": "Overloaded"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "table",
+      "title": "Overloaded Services (CPU/RAM above threshold)",
+      "gridPos": { "x": 0, "y": 32, "w": 24, "h": 6 },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": { "type": "auto" }
+          }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "CPU %" },  "properties": [{ "id": "unit", "value": "percent" }, { "id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"} }] },
+          { "matcher": { "id": "byName", "options": "RAM %" },  "properties": [{ "id": "unit", "value": "percent" }, { "id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"} }] }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "CPU %", "desc": true }]
+      },
+      "targets": [
+        {
+          "expr": "autoscaler_cpu_pct{instance=~\"$instance\", service=~\"$service\"} >= on(service) autoscaler_cpu_threshold{instance=~\"$instance\", service=~\"$service\"} or autoscaler_mem_pct{instance=~\"$instance\", service=~\"$service\"} >= on(service) autoscaler_ram_threshold{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "CPU load"
+        },
+        {
+          "expr": "autoscaler_cpu_pct{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "CPU %",
+          "refId": "B"
+        },
+        {
+          "expr": "autoscaler_mem_pct{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "RAM %",
+          "refId": "C"
+        },
+        {
+          "expr": "autoscaler_replicas{instance=~\"$instance\", service=~\"$service\"}",
+          "datasource": "$datasource",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "Replicas",
+          "refId": "D"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "fieldName": "Value #CPU load",
+                "config": { "id": "greaterThan", "options": { "value": 0 } }
+              }
+            ],
+            "type": "include",
+            "match": "any"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "instance": true, "job": true, "__name__": true, "Value #CPU load": true },
+            "renameByName": {
+              "service": "Service",
+              "Value #CPU %": "CPU %",
+              "Value #RAM %": "RAM %",
+              "Value #Replicas": "Replicas"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  }
+}

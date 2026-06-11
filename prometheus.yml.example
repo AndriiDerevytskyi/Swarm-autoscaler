@@ -1,0 +1,46 @@
+# Prometheus scrape config for Swarm Autoscaler
+#
+# Place this in your prometheus.yml under scrape_configs,
+# or use it as a reference for your own setup.
+
+scrape_configs:
+  - job_name: 'swarm-autoscaler'
+
+    # How Prometheus discovers autoscaler instances.
+    # Pick ONE method below:
+
+    # ── Option A: static target (single autoscaler) ──────────────────────
+    # static_configs:
+    #   - targets: ['192.168.1.10:8080']
+    #     labels:
+    #       instance: 'swarm-prod'
+
+    # ── Option B: DNS-based for Swarm with multiple instances ────────────
+    # dns_sd_configs:
+    #   - names:
+    #       - 'autoscaler.traefik'   # resolves to all autoscaler replicas
+    #     type: A
+    #     port: 8080
+
+    # ── Option C: file-based discovery (update targets dynamically) ──────
+    # file_sd_configs:
+    #   - files:
+    #       - '/etc/prometheus/autoscaler-targets.json'
+    #     refresh_interval: 5m
+
+    # ── Common settings ──────────────────────────────────────────────────
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    metrics_path: '/api/metrics'
+
+    # Uncomment if you set AUTOSCALER_METRICS_USER / AUTOSCALER_METRICS_HASH_PASSWORD
+    # basic_auth:
+    #   username: metrics
+    #   password: your-password-here
+
+    # Optional: relabel to set instance label from target
+    # relabel_configs:
+    #   - source_labels: [__address__]
+    #     target_label: instance
+    #     regex: '(.+):\d+'
+    #     replacement: '$1'
