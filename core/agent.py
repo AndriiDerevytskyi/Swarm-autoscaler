@@ -144,6 +144,11 @@ def main():
             managed = _fetch_managed()
             need_bootstrap = False
 
+        if not managed and not _AGENT_SECRET:
+            _bootstrap()
+            managed = _fetch_managed()
+            continue
+
         for name in managed:
             try:
                 if name.startswith("autoscaler"):
