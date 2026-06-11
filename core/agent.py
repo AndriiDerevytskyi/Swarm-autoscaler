@@ -45,6 +45,7 @@ def _bootstrap() -> bool:
 
 
 def _report(service_name: str, replicas: int, cpu_pct: float, mem_pct: float) -> str:
+    global _AGENT_SECRET
     if not _AGENT_SECRET:
         return "nokey"
 

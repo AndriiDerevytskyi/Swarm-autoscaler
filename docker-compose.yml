@@ -1,6 +1,6 @@
 services:
   autoscaler:
-    image: ozzzyad/swarm-autoscaler:latest
+    image: &image ozzzyad/swarm-autoscaler:latest
     environment:
       AUTOSCALER_LOG_LEVEL: "INFO"       # DEBUG | INFO | WARN | ERROR
       AUTOSCALER_POLL_INTERVAL: "15"     # poll interval, seconds
@@ -10,7 +10,7 @@ services:
       AUTOSCALER_DEFAULT_MAX_REPLICAS: "5"
       AUTOSCALER_DEFAULT_CPU_THRESHOLD: "80"   # %
       AUTOSCALER_DEFAULT_RAM_THRESHOLD: "80"   # %
-      AUTOSCALER_DEFAULT_COOLDOWN: "5"          # minutes
+      AUTOSCALER_DEFAULT_COOLDOWN: "5"         # minutes
     ports:
       - "8080:8080"
     volumes:
@@ -39,7 +39,7 @@ services:
         max-file: "3"
 
   agent:
-    image: ozzzyad/swarm-autoscaler:latest
+    image: *image
     environment:
       AUTOSCALER_ROLE: "agent"
       AUTOSCALER_MANAGER_URL: "http://autoscaler:8080"

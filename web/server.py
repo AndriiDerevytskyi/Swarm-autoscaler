@@ -20,6 +20,7 @@ from core.database import (
     get_replica_history,
     meta_get,
     meta_set,
+    meta_set_batch,
     pause_service,
     record_event,
     record_node_metrics,
@@ -71,6 +72,11 @@ def remove_service(name: str) -> None:
         _services.pop(name, None)
 
 
+def managed_names() -> set:
+    with _lock:
+        return set(_services.keys())
+
+
 def set_docker_health(ok: bool) -> None:
     global _docker_ok
     _docker_ok = ok
@@ -94,6 +100,7 @@ def _sse_payload() -> str:
 
 
 def broadcast_sse() -> None:
+    global _sse_clients
     payload = _sse_payload()
     with _sse_lock:
         dead = set()
@@ -142,7 +149,7 @@ def stream():
 @app.before_request
 def _require_auth():
     if request.path in ("/api/stream", "/api/health", "/api/agent/report",
-                         "/api/auth/status", "/api/auth/setup"):
+                         "/api/agent/secret", "/api/auth/status", "/api/auth/setup"):
         return
 
     if request.path == "/api/metrics":
@@ -279,9 +286,11 @@ def metrics_auth_enable():
     password = secrets.token_hex(16)
     from werkzeug.security import generate_password_hash
     phash = generate_password_hash(password)
-    meta_set("metrics_enabled", "1")
-    meta_set("metrics_user", user)
-    meta_set("metrics_password_hash", phash)
+    meta_set_batch({
+        "metrics_enabled": "1",
+        "metrics_user": user,
+        "metrics_password_hash": phash,
+    })
     return jsonify({"ok": True, "username": user, "password": password})
 
 

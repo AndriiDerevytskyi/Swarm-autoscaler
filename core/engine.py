@@ -126,6 +126,7 @@ def main() -> None:
     last_action: Dict[str, str]      = {}
     last_scale:  Dict[str, datetime] = {}
     warned:      Set[tuple]          = set()
+    warned_limits: Set[str]          = set()
 
     while not _shutdown.is_set():
         try:
@@ -165,11 +166,13 @@ def main() -> None:
                 has_cpu = bool(res_limits.get("NanoCPUs") or res_limits.get("CPUs"))
                 has_mem = bool(res_limits.get("MemoryBytes"))
                 if not has_cpu and not has_mem:
-                    log.warning(
-                        "%s: labeled for autoscaling but has no resource limits set "
-                        "(deploy.resources.limits) — skipping. CPU/RAM percentages "
-                        "are meaningless without limits.", name
-                    )
+                    if name not in warned_limits:
+                        log.warning(
+                            "%s: labeled for autoscaling but has no resource limits set "
+                            "(deploy.resources.limits) — skipping. CPU/RAM percentages "
+                            "are meaningless without limits.", name
+                        )
+                        warned_limits.add(name)
                     continue
 
                 managed.add(name)
@@ -258,7 +261,7 @@ def main() -> None:
                 log.error("Unexpected error processing service %s: %s",
                           svc.name, exc, exc_info=True)
 
-        for gone in set(web._services.keys()) - managed:
+        for gone in web.managed_names() - managed:
             web.remove_service(gone)
 
         web.broadcast_sse()

@@ -1,10 +1,9 @@
 services:
   autoscaler:
-    image: ozzzyad/swarm-autoscaler:latest
+    image: &image ozzzyad/swarm-autoscaler:latest
     environment:
       AUTOSCALER_LOG_LEVEL: "INFO"       # DEBUG | INFO | WARN | ERROR
       AUTOSCALER_POLL_INTERVAL: "15"     # poll interval, seconds
-      AUTOSCALER_WEB_PORT: "8080"        # web UI port
       # Default thresholds for services without explicit labels
       AUTOSCALER_DEFAULT_MIN_REPLICAS: "1"
       AUTOSCALER_DEFAULT_MAX_REPLICAS: "5"
@@ -37,9 +36,9 @@ services:
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.autoscaler.service=autoscaler"
-        - "traefik.http.routers.autoscaler.rule=Host(`${SWARM_AUTOSCALER_HOST}`)"
+        - "traefik.http.routers.autoscaler.rule=Host(`${AUTOSCALER_DOMAIN}`)"
         - "traefik.http.services.autoscaler.loadbalancer.passhostheader=true"
-        - "traefik.http.services.autoscaler.loadbalancer.server.port=${AUTOSCALER_WEB_PORT}"
+        - "traefik.http.services.autoscaler.loadbalancer.server.port=8080"
         - "traefik.http.middlewares.compresstraefik.compress=true"
         - "traefik.http.routers.autoscaler.entrypoints=websecure"
         - "traefik.http.routers.autoscaler.tls=true"
@@ -49,7 +48,7 @@ services:
         max-file: "3"
 
   agent:
-    image: ozzzyad/swarm-autoscaler:latest
+    image: *image
     environment:
       AUTOSCALER_ROLE: "agent"
       AUTOSCALER_MANAGER_URL: "http://autoscaler:8080"
@@ -70,6 +69,9 @@ services:
           memory: 32M
       restart_policy:
         condition: on-failure
+      placement:
+        constraints:
+          - node.platform.os == linux
     logging:
       options:
         max-size: "10m"

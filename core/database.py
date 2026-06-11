@@ -234,6 +234,16 @@ def meta_set(key: str, value: str) -> None:
         conn.commit()
 
 
+def meta_set_batch(entries: dict) -> None:
+    conn = _get_conn()
+    with _lock:
+        for key, value in entries.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value)
+            )
+        conn.commit()
+
+
 # ── Auth ─────────────────────────────────────────────────────────────────────
 
 def auth_is_configured() -> bool:
