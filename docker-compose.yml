@@ -76,4 +76,3 @@ networks:
   autoscaler:
     driver: overlay
     attachable: true
-    internal: true

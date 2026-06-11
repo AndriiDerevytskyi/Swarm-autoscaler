@@ -85,6 +85,5 @@ networks:
   autoscaler:
     driver: overlay
     attachable: true
-    internal: true
   traefik:
     external: true

@@ -5,7 +5,7 @@ const IC = {
   dashboard: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`,
   services:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`,
   events:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
-  about:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
+  settings:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>`,
   alert:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
   search:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
   download:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`,
@@ -18,7 +18,7 @@ const NAV = [
   { id: 'dashboard', label: 'Dashboard', icon: IC.dashboard },
   { id: 'services',  label: 'Services',  icon: IC.services  },
   { id: 'events',    label: 'Events',    icon: IC.events    },
-  { id: 'about',     label: 'About',     icon: IC.about     },
+  { id: 'settings',  label: 'Settings',  icon: IC.settings  },
 ];
 
 // ── State ─────────────────────────────────────────────────────────────────
@@ -521,7 +521,7 @@ window.authDoChange = async function () {
 async function checkAuth() {
   try { const s = await api.authStatus(); _authOk = s.configured; _loggedIn = s.authenticated; } catch (_) {}
   try { _metricsAuth = await api.metricsAuthStatus(); } catch (_) {}
-  if (curPage() === 'about') renderPage();
+  if (curPage() === 'settings') renderPage();
 }
 
 window.metricsEnable = async function () {
@@ -724,7 +724,7 @@ function pageEvents() {
 </div>`;
 }
 
-function pageAbout() {
+function pageSettings() {
   const d = _cfg.label_defaults || {};
   const row = (k, v) =>
     `<div class="info-row"><span class="info-key">${esc(k)}</span><span class="info-val">${esc(v)}</span></div>`;
@@ -782,8 +782,8 @@ function pageAbout() {
 
   return dockerBanner() + `
 <div class="page-header">
-  <div><div class="page-title">About</div>
-       <div class="page-sub">Runtime parameters and label reference</div></div>
+  <div><div class="page-title">Settings</div>
+       <div class="page-sub">Runtime parameters, authentication, and label reference</div></div>
 </div>
 <div class="page-body">
   ${authSection}
@@ -822,7 +822,7 @@ function emptyState(kind) {
 }
 
 // ── Router ────────────────────────────────────────────────────────────────
-const ROUTES = { dashboard: pageDashboard, services: pageServices, events: pageEvents, about: pageAbout };
+const ROUTES = { dashboard: pageDashboard, services: pageServices, events: pageEvents, settings: pageSettings };
 
 function curPage() {
   return location.hash.replace(/^#\/?/, '') || 'dashboard';
@@ -876,7 +876,7 @@ function connectSSE() {
 
   _sse.onopen = function () {
     _online = true;
-    renderPage();
+    if (_loggedIn || !_authOk) renderPage();
   };
 
   _sse.onmessage = function (e) {
@@ -888,7 +888,7 @@ function connectSSE() {
       _lastAt    = new Date();
       _online    = true;
       _events    = filteredEvents();
-      renderPage();
+      if (_loggedIn || !_authOk) renderPage();
     } catch (err) {
       console.error('SSE parse error', err);
     }
@@ -896,7 +896,7 @@ function connectSSE() {
 
   _sse.onerror = function () {
     _online = false;
-    renderPage();
+    if (_loggedIn || !_authOk) renderPage();
     _sse.close();
     setTimeout(connectSSE, 5000);
   };

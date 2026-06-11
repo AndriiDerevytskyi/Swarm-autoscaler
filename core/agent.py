@@ -41,7 +41,6 @@ def _bootstrap() -> bool:
     if now < _bootstrap_cooldown:
         return bool(_AGENT_SECRET)
 
-    _bootstrap_cooldown = now + 60
     try:
         data = _call_manager("/api/agent/secret")
         if data and data.get("secret"):
@@ -50,10 +49,12 @@ def _bootstrap() -> bool:
             log.info("Agent secret bootstrapped from manager")
             return True
         else:
+            _bootstrap_cooldown = now + 60
             log.warning("Manager returned no secret – will retry in 60s")
             return False
     except Exception as exc:
-        log.warning("Failed to bootstrap agent secret: %s – will retry in 60s", exc)
+        _bootstrap_cooldown = now + 10  # short cooldown for connection/DNS errors
+        log.warning("Failed to bootstrap agent secret: %s – will retry in 10s", exc)
         return False
 
 
