@@ -166,6 +166,10 @@ def stream():
 
 @app.before_request
 def _require_auth():
+    # only protect API routes — static files and SPA shell are always public
+    if not request.path.startswith("/api/"):
+        return
+
     if request.path in ("/api/stream", "/api/health", "/api/agent/report",
                          "/api/agent/secret", "/api/agent/managed",
                          "/api/auth/status", "/api/auth/setup",
