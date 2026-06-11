@@ -1,14 +1,14 @@
 import json
 import os
 import queue
+import secrets
 import threading
-import logging
 from datetime import datetime
 from typing import Dict, Set
 
 import docker
 from docker.errors import DockerException
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory, session
 from werkzeug.security import check_password_hash
 
 from core.database import (
@@ -35,7 +35,7 @@ app = Flask(
     static_url_path="/static",
     template_folder=os.path.join(_DIR, "templates"),
 )
-logging.getLogger("werkzeug").setLevel(logging.ERROR)
+# werkzeug logging is configured in core/logging.py
 
 _lock = threading.Lock()
 _services: Dict[str, dict] = {}
@@ -51,12 +51,21 @@ def setup(
     web_port: int,
     label_defaults: dict,
     agent_secret: str = "",
+    session_secret: str = "",
 ) -> None:
     global _config
+    app.secret_key = session_secret or secrets.token_hex(32)
+    version = "dev"
+    try:
+        with open("/app/VERSION") as f:
+            version = f.read().strip()
+    except Exception:
+        pass
     _config = {
         "log_level":      log_level,
         "poll_interval":  poll_interval,
         "web_port":       web_port,
+        "version":        version,
         "label_defaults": label_defaults,
         "_agent_secret": agent_secret,
     }
@@ -83,7 +92,16 @@ def set_docker_health(ok: bool) -> None:
 
 
 def start(host: str = "0.0.0.0", port: int = 8080) -> None:
-    app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+    import werkzeug.serving as _ws
+    _orig_log = _ws._log
+    def _quiet_log(level, msg, *args):
+        if level not in ("info",):
+            _orig_log(level, msg, *args)
+    _ws._log = _quiet_log
+    try:
+        app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+    finally:
+        _ws._log = _orig_log
 
 
 # ── SSE (Server-Sent Events) ───────────────────────────────────────────────
@@ -149,7 +167,9 @@ def stream():
 @app.before_request
 def _require_auth():
     if request.path in ("/api/stream", "/api/health", "/api/agent/report",
-                         "/api/agent/secret", "/api/auth/status", "/api/auth/setup"):
+                         "/api/agent/secret", "/api/agent/managed",
+                         "/api/auth/status", "/api/auth/setup",
+                         "/api/auth/login", "/api/auth/logout"):
         return
 
     if request.path == "/api/metrics":
@@ -167,13 +187,8 @@ def _require_auth():
     if not auth_is_configured():
         return
 
-    auth = request.authorization
-    if not auth or not auth_verify(auth.username, auth.password):
-        return Response(
-            "Authentication required",
-            401,
-            {"WWW-Authenticate": 'Basic realm="Swarm Autoscaler"'},
-        )
+    if not session.get("user"):
+        return Response("Authentication required", 401)
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
@@ -229,7 +244,10 @@ def health():
 
 @app.get("/api/auth/status")
 def auth_status():
-    return jsonify({"configured": auth_is_configured()})
+    return jsonify({
+        "configured":    auth_is_configured(),
+        "authenticated": bool(session.get("user")),
+    })
 
 
 @app.post("/api/auth/setup")
@@ -249,10 +267,38 @@ def auth_setup():
     return jsonify({"ok": True})
 
 
+@app.post("/api/auth/login")
+def auth_login():
+    if not auth_is_configured():
+        return jsonify({"ok": False, "error": "no user configured"}), 400
+
+    data = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+    if not username or not password:
+        return jsonify({"ok": False, "error": "username and password required"}), 400
+
+    if not auth_verify(username, password):
+        return jsonify({"ok": False, "error": "invalid credentials"}), 401
+
+    session["user"] = username
+    return jsonify({"ok": True, "username": username})
+
+
+@app.post("/api/auth/logout")
+def auth_logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
 @app.post("/api/auth/change")
 def auth_change():
     if not auth_is_configured():
         return jsonify({"ok": False, "error": "no user configured"}), 400
+
+    current_user = session.get("user", "")
+    if not current_user:
+        return jsonify({"ok": False, "error": "not authenticated"}), 401
 
     data = request.get_json(silent=True) or {}
     current  = (data.get("current_password") or "").strip()
@@ -262,11 +308,10 @@ def auth_change():
     if len(new_pass) < 4:
         return jsonify({"ok": False, "error": "password must be at least 4 characters"}), 400
 
-    auth = request.authorization
-    if not auth or not auth_verify(auth.username, current):
+    if not auth_verify(current_user, current):
         return jsonify({"ok": False, "error": "current password is incorrect"}), 403
 
-    auth_set_password(auth.username, new_pass)
+    auth_set_password(current_user, new_pass)
     return jsonify({"ok": True})
 
 
@@ -343,6 +388,19 @@ def agent_bootstrap():
     if not (src.startswith("10.") or src.startswith("172.") or src.startswith("192.168.") or src == "127.0.0.1"):
         return jsonify({"secret": None}), 403
     return jsonify({"secret": secret})
+
+
+@app.get("/api/agent/managed")
+def agent_managed():
+    secret = _config.get("_agent_secret", "")
+    if secret:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {secret}":
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    with _lock:
+        names = [s["name"] for s in _services.values()]
+    return jsonify({"services": names})
 
 
 @app.get("/api/services")

@@ -36,6 +36,7 @@ let _sortDir     = 'asc';
 let _search      = '';
 let _theme       = localStorage.getItem('autoscaler-theme') || 'dark';
 let _authOk       = false;
+let _loggedIn     = false;
 let _metricsAuth   = { enabled: false, username: '' };
 
 // ── Theme ─────────────────────────────────────────────────────────────────
@@ -110,6 +111,18 @@ const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     });
+    return r.json();
+  },
+  async authLogin(username, password) {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    return r.json();
+  },
+  async authLogout() {
+    const r = await fetch('/api/auth/logout', { method: 'POST' });
     return r.json();
   },
   async authChange(current, newPw) {
@@ -446,6 +459,28 @@ window.filterEvents = function () {
 };
 
 // ── Auth ───────────────────────────────────────────────────────────────────
+window.authDoLogin = async function () {
+  const u = document.getElementById('login-user')?.value.trim();
+  const p = document.getElementById('login-pass')?.value.trim();
+  if (!u || !p) { toast('Username and password required', false); return; }
+  try {
+    const res = await api.authLogin(u, p);
+    if (res.ok) {
+      _loggedIn = true;
+      toast('Logged in');
+      renderPage();
+    } else {
+      toast(res.error || 'Login failed', false);
+    }
+  } catch (e) { toast(`Error: ${e.message}`, false); }
+};
+
+window.authDoLogout = async function () {
+  try { await api.authLogout(); } catch (_) {}
+  _loggedIn = false;
+  renderPage();
+};
+
 window.authDoSetup = async function () {
   const u = document.getElementById('setup-user')?.value.trim();
   const p = document.getElementById('setup-pass')?.value.trim();
@@ -484,7 +519,7 @@ window.authDoChange = async function () {
 };
 
 async function checkAuth() {
-  try { const s = await api.authStatus(); _authOk = s.configured; } catch (_) {}
+  try { const s = await api.authStatus(); _authOk = s.configured; _loggedIn = s.authenticated; } catch (_) {}
   try { _metricsAuth = await api.metricsAuthStatus(); } catch (_) {}
   if (curPage() === 'about') renderPage();
 }
@@ -529,6 +564,25 @@ window.metricsRegen = async function () {
 };
 
 // ── Pages ─────────────────────────────────────────────────────────────────
+function pageLogin() {
+  return `
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" width="28" height="28">
+        <polyline points="17 8 12 3 7 8"/><polyline points="7 16 12 21 17 16"/>
+        <line x1="12" y1="3" x2="12" y2="21"/>
+      </svg>
+      <div>Swarm Autoscaler</div>
+    </div>
+    <input class="search-input" id="login-user" type="text" placeholder="Username" style="margin-bottom:10px;width:100%;max-width:100%">
+    <input class="search-input" id="login-pass" type="password" placeholder="Password" style="margin-bottom:14px;width:100%;max-width:100%">
+    <button class="btn btn-primary" onclick="authDoLogin()" style="width:100%;padding:8px">Log In</button>
+  </div>
+</div>`;
+}
+
 function pageDashboard() {
   const filtered = _search ? _svcs.filter(s => s.name.toLowerCase().includes(_search.toLowerCase())) : _svcs;
   const sorted   = sortServices(filtered);
@@ -776,13 +830,24 @@ function curPage() {
 
 function renderNav() {
   const cur = curPage();
+  const logoutBtn = _loggedIn
+    ? `<div class="nav-link" onclick="authDoLogout()" style="margin-top:auto">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+           <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+         </svg><span>Logout</span>
+       </div>`
+    : '';
   document.getElementById('nav').innerHTML = NAV.map(n => `
     <div class="nav-link ${n.id === cur ? 'active' : ''}" onclick="go('${n.id}')">
       ${n.icon}<span>${n.label}</span>
-    </div>`).join('');
+    </div>`).join('') + logoutBtn;
 }
 
 function renderPage() {
+  if (_authOk && !_loggedIn) {
+    document.getElementById('page').innerHTML = pageLogin();
+    return;
+  }
   const fn = ROUTES[curPage()] || pageDashboard;
   document.getElementById('page').innerHTML = fn();
 }
@@ -843,6 +908,9 @@ function connectSSE() {
   document.getElementById('page').innerHTML =
     '<div class="spinner-wrap"><div class="spinner"></div></div>';
   try { _cfg = await api.config(); } catch (_) {}
+  const v = _cfg.version || 'dev';
+  const el = document.getElementById('sidebar-version');
+  if (el) el.textContent = `swarm-autoscaler ${v}`;
   await checkAuth();
   await refresh();
   connectSSE();

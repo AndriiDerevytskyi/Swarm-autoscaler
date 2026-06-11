@@ -51,6 +51,10 @@ services:
       - autoscaler
     deploy:
       mode: global
+      placement:
+        constraints:
+          - node.role == worker
+          - node.platform.os == linux
       resources:
         limits:
           memory: 64M

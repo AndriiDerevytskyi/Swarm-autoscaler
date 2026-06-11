@@ -871,6 +871,33 @@ th .sort-arrow.active { opacity: 1; color: var(--accent); }
 
 .docker-down-banner svg { width: 16px; height: 16px; flex-shrink: 0; }
 
+/* ── Login page ── */
+.login-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+.login-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 32px 28px;
+  width: 340px;
+}
+
+.login-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 24px;
+  color: var(--accent);
+  font-size: 16px;
+  font-weight: 600;
+}
+
 /* ── Auth forms ── */
 .auth-form {
   display: flex;

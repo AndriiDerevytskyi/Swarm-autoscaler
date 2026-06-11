@@ -1,5 +1,6 @@
 FROM python:3.12-slim
 
+ARG VERSION=dev
 WORKDIR /app
 
 COPY requirements.txt .
@@ -10,6 +11,7 @@ COPY core/ ./core/
 COPY web/  ./web/
 COPY healthcheck.py /
 
+RUN echo -n "$VERSION" > /app/VERSION
 RUN mkdir -p data && chmod +x /healthcheck.py
 
 VOLUME ["/app/data"]

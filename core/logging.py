@@ -20,10 +20,19 @@ class _Formatter(logging.Formatter):
 def _setup_logging() -> logging.Logger:
     handler = logging.StreamHandler()
     handler.setFormatter(_Formatter())
+
     logger = logging.getLogger("autoscaler")
     logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
     logger.addHandler(handler)
     logger.propagate = False
+
+    # route Flask/werkzeug through our JSON formatter
+    werk = logging.getLogger("werkzeug")
+    werk.handlers.clear()
+    werk.addHandler(handler)
+    werk.setLevel(logging.WARNING)
+    werk.propagate = False
+
     return logger
 
 

@@ -1,24 +1,38 @@
+import json
 import os
 import signal
 import socket
 import threading
 import time
-import urllib.request
 import urllib.error
-import json
+import urllib.request
 
 import docker
-from docker.errors import APIError, DockerException
+from docker.errors import DockerException
 
-from core.config import POLL_INTERVAL, parse_config
 from core.logging import log
-from core.stats import collect_stats, current_replicas
+from core.stats import collect_stats
 
 MANAGER_URL = os.getenv("AUTOSCALER_MANAGER_URL", "http://autoscaler:8080")
-NODE_NAME   = os.getenv("AUTOSCALER_NODE_NAME", socket.gethostname())
+POLL_INTERVAL = int(os.getenv("AUTOSCALER_POLL_INTERVAL", "15"))
+NODE_NAME     = os.getenv("AUTOSCALER_NODE_NAME", socket.gethostname())
 
-_AGENT_SECRET      = ""
-_bootstrap_cooldown = 0.0
+_AGENT_SECRET       = ""
+_bootstrap_cooldown  = 0.0
+
+
+def _call_manager(path: str, timeout: int = 5):
+    headers = {}
+    if _AGENT_SECRET:
+        headers["Authorization"] = f"Bearer {_AGENT_SECRET}"
+    req = urllib.request.Request(f"{MANAGER_URL}{path}", headers=headers)
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+        return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return None
+        raise
 
 
 def _bootstrap() -> bool:
@@ -27,14 +41,13 @@ def _bootstrap() -> bool:
     if now < _bootstrap_cooldown:
         return bool(_AGENT_SECRET)
 
-    _bootstrap_cooldown = now + 60  # cooldown regardless of outcome
+    _bootstrap_cooldown = now + 60
     try:
-        resp = urllib.request.urlopen(f"{MANAGER_URL}/api/agent/secret", timeout=5)
-        data = json.loads(resp.read())
-        _AGENT_SECRET = data.get("secret", "")
-        if _AGENT_SECRET:
+        data = _call_manager("/api/agent/secret")
+        if data and data.get("secret"):
+            _AGENT_SECRET = data["secret"]
+            _bootstrap_cooldown = 0
             log.info("Agent secret bootstrapped from manager")
-            _bootstrap_cooldown = 0  # success — allow immediate re-bootstrap if needed later
             return True
         else:
             log.warning("Manager returned no secret – will retry in 60s")
@@ -42,6 +55,20 @@ def _bootstrap() -> bool:
     except Exception as exc:
         log.warning("Failed to bootstrap agent secret: %s – will retry in 60s", exc)
         return False
+
+
+def _fetch_managed() -> list:
+    global _AGENT_SECRET
+    try:
+        data = _call_manager("/api/agent/managed")
+        if data is None:
+            global _AGENT_SECRET
+            _AGENT_SECRET = ""
+            return []
+        return data.get("services", [])
+    except Exception as exc:
+        log.warning("Failed to fetch managed services: %s", exc)
+        return []
 
 
 def _report(service_name: str, replicas: int, cpu_pct: float, mem_pct: float) -> str:
@@ -69,7 +96,7 @@ def _report(service_name: str, replicas: int, cpu_pct: float, mem_pct: float) ->
         return "ok"
     except urllib.error.HTTPError as e:
         if e.code == 401:
-            _AGENT_SECRET = ""  # invalidate — force re-bootstrap
+            _AGENT_SECRET = ""
             return "reauth"
         log.debug("Failed to report to manager: HTTP %s", e.code)
         return "ok"
@@ -108,59 +135,41 @@ def main():
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    warned: set = set()
+    managed = []
     need_bootstrap = False
 
     while not _shutdown.is_set():
-        try:
-            services = client.services.list()
-        except APIError as exc:
-            log.error("Failed to list Swarm services: %s", exc)
-            _shutdown.wait(timeout=POLL_INTERVAL)
-            continue
+        if not managed or need_bootstrap:
+            managed = _fetch_managed()
+            need_bootstrap = False
 
-        for svc in services:
+        for name in managed:
             try:
-                svc.reload()
-                labels = svc.attrs.get("Spec", {}).get("Labels", {}) or {}
-                cfg = parse_config(svc.name, labels, warned)
-                if cfg is None:
-                    continue
-
-                name = svc.name
                 if name.startswith("autoscaler"):
                     continue
 
-                task_tmpl = svc.attrs.get("Spec", {}).get("TaskTemplate", {})
-                res_limits = task_tmpl.get("Resources", {}).get("Limits") or {}
-                has_cpu = bool(res_limits.get("NanoCPUs") or res_limits.get("CPUs"))
-                has_mem = bool(res_limits.get("MemoryBytes"))
-                if not has_cpu and not has_mem:
-                    continue
-
-                replicas = current_replicas(svc)
                 stats = collect_stats(client, name)
-
                 if stats:
-                    result = _report(name, replicas, stats["cpu_pct"], stats["mem_pct"])
+                    ctrs = client.containers.list(
+                        filters={"label": f"com.docker.swarm.service.name={name}"}
+                    )
+                    result = _report(name, len(ctrs), stats["cpu_pct"], stats["mem_pct"])
                     if result == "reauth":
                         need_bootstrap = True
+                        _bootstrap()
+                        managed = _fetch_managed()
+                        break
                     elif result == "nokey":
                         need_bootstrap = True
+                        continue
                     else:
                         log.debug("%s: reported cpu=%.1f%% mem=%.1f%% replicas=%d",
-                                  name, stats["cpu_pct"], stats["mem_pct"], replicas)
+                                  name, stats["cpu_pct"], stats["mem_pct"], len(ctrs))
                 else:
                     log.debug("%s: no containers on this node – skipping", name)
 
             except Exception as exc:
-                log.error("Unexpected error processing service %s: %s",
-                          svc.name, exc)
-
-        if need_bootstrap:
-            log.warning("Agent secret invalid — attempting re-bootstrap")
-            if _bootstrap():
-                need_bootstrap = False
+                log.error("Unexpected error processing service %s: %s", name, exc)
 
         _shutdown.wait(timeout=POLL_INTERVAL)
 

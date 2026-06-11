@@ -71,6 +71,7 @@ services:
         condition: on-failure
       placement:
         constraints:
+          - node.role == worker
           - node.platform.os == linux
     logging:
       options:
