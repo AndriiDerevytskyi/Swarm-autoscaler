@@ -18,6 +18,7 @@ from core.config import (
 from core.database import (
     expire_paused,
     get_node_metrics,
+    get_pause_expiry,
     get_replica_history,
     is_paused,
     meta_get,
@@ -143,6 +144,7 @@ def main() -> None:
         # auto-resume paused services whose timer expired
         for svc_name in expire_paused():
             log.info("%s: pause expired – resuming autoscaling", svc_name)
+            record_event(svc_name, "resume", 0, 0, "pause timer expired")
 
         for svc in services:
             try:
@@ -252,6 +254,7 @@ def main() -> None:
                     "last_action":      last_action.get(name),
                     "last_scale_at":    last_scale.get(name),
                     "cooldown_until":   cooldown.get(name),
+                    "pause_until":      get_pause_expiry(name) if paused else None,
                     "paused":           paused,
                     "alerts":           alerts,
                     "history":          history,

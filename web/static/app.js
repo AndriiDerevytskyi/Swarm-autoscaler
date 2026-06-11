@@ -203,6 +203,15 @@ function cooldownLeft(s) {
   return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
 }
 
+function pauseLeft(s) {
+  if (!s.pause_until) return null;
+  const ms = new Date(s.pause_until + 'Z').getTime() - Date.now();
+  if (ms <= 0) return null;
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return 'less than a minute';
+  return `${m} min remaining`;
+}
+
 function dots(current, max) {
   const cap = Math.min(max, 12);
   let html = '';
@@ -325,7 +334,7 @@ function svcCard(s) {
   const spark = sparklineSVG(s.history, 120, 28, 'var(--accent)');
 
   const pauseHTML = s.paused
-    ? `<button class="btn-resume" onclick="applyResume('${id}')">▶ Resume</button>`
+    ? `<button class="btn-resume" onclick="applyResume('${id}')">⏹ Unpause</button>`
     : `<div class="pause-ctl">
          <select id="pause-dur-${id}">
            <option value="0">indefinitely</option>
@@ -369,7 +378,7 @@ function svcCard(s) {
   </div>
   <div class="card-foot">
     <span class="cooldown-txt ${left ? 'hot' : ''}">
-      ${left ? `⏱ cooldown ${left}` : `cooldown ${s.cooldown_minutes} min`}
+      ${s.paused && s.pause_until ? `⏸ ${pauseLeft(s)}` : left ? `⏱ cooldown ${left}` : `cooldown ${s.cooldown_minutes} min`}
     </span>
     <div class="card-foot-right">
       ${pauseHTML}
@@ -420,7 +429,7 @@ window.applyPause = async function (name) {
 window.applyResume = async function (name) {
   try {
     const res = await api.resume(name);
-    if (res.ok) { toast(`${name}: autoscaling resumed`); await refresh(); }
+    if (res.ok) { toast(`${name}: autoscaling unpaused`); await refresh(); }
     else toast(res.error || 'Resume failed', false);
   } catch (e) { toast(`Error: ${e.message}`, false); }
 };
@@ -703,16 +712,18 @@ function pageEvents() {
   if (_events.length === 0) return dockerBanner() + header + emptyState('events');
 
   const items = _events.map(e => {
-    const iconMap = { up: '↑', down: '↓', manual: '✎' };
+    const iconMap = { up: '↑', down: '↓', manual: '✎', pause: '⏸', resume: '▶' };
+    const actionLabel = { up: 'scaled up', down: 'scaled down', manual: 'scaled manually', pause: 'paused', resume: 'resumed' };
+    const detail = (e.action === 'pause' || e.action === 'resume')
+      ? `<span>${esc(e.reason || '')}</span>`
+      : `<span>${e.from_replicas} → ${e.to_replicas} replicas</span>
+         ${e.reason ? `<span>${esc(e.reason)}</span>` : ''}`;
     return `<div class="event-item">
       <div class="event-icon ${e.action}">${iconMap[e.action] || '•'}</div>
       <div class="event-body">
         <div class="event-title">${esc(e.service_name)}
-          <span>scaled ${e.action === 'up' ? 'up' : e.action === 'down' ? 'down' : 'manually'}</span></div>
-        <div class="event-detail">
-          <span>${e.from_replicas} → ${e.to_replicas} replicas</span>
-          ${e.reason ? `<span>${esc(e.reason)}</span>` : ''}
-        </div>
+          <span>${actionLabel[e.action] || e.action}</span></div>
+        <div class="event-detail">${detail}</div>
       </div>
       <div class="event-time">${formatTime(e.timestamp)}</div>
     </div>`;

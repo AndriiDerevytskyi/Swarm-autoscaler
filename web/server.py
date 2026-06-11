@@ -477,6 +477,10 @@ def api_pause_service(name: str):
     data = request.get_json(silent=True) or {}
     duration = data.get("duration", 0)
     pause_service(name, duration)
+    if duration > 0:
+        record_event(name, "pause", 0, 0, f"paused for {duration} min")
+    else:
+        record_event(name, "pause", 0, 0, "paused indefinitely")
     with _lock:
         if name in _services:
             _services[name]["paused"] = True
@@ -490,6 +494,7 @@ def api_pause_service(name: str):
 @app.post("/api/services/<name>/resume")
 def api_resume_service(name: str):
     resume_service(name)
+    record_event(name, "resume", 0, 0, "autoscaling resumed")
     with _lock:
         if name in _services:
             _services[name]["paused"] = False

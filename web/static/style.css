@@ -762,6 +762,8 @@ th .sort-arrow.active { opacity: 1; color: var(--accent); }
 .event-icon.up     { background: var(--red-dim);    color: var(--red);    }
 .event-icon.down   { background: var(--green-dim);  color: var(--green);  }
 .event-icon.manual { background: var(--accent-dim); color: var(--accent); }
+.event-icon.pause  { background: var(--amber-dim);  color: var(--amber);  }
+.event-icon.resume { background: var(--green-dim);  color: var(--green);  }
 
 .event-body { flex: 1; min-width: 0; }
 

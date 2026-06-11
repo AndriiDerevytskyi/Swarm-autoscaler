@@ -147,6 +147,7 @@ def main():
         if not managed and not _AGENT_SECRET:
             _bootstrap()
             managed = _fetch_managed()
+            _shutdown.wait(timeout=POLL_INTERVAL)
             continue
 
         for name in managed:

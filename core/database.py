@@ -173,6 +173,16 @@ def get_paused_services() -> List[str]:
     return [r["service_name"] for r in rows]
 
 
+def get_pause_expiry(service_name: str) -> str:
+    conn = _get_conn()
+    with _lock:
+        row = conn.execute(
+            "SELECT resume_after FROM paused_services WHERE service_name = ?",
+            (service_name,),
+        ).fetchone()
+    return row["resume_after"] if row else ""
+
+
 def expire_paused() -> List[str]:
     conn = _get_conn()
     with _lock:
