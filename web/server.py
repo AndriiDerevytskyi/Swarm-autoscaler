@@ -177,8 +177,6 @@ def _require_auth():
         return
 
     if request.path == "/api/metrics":
-        if not _metrics_enabled():
-            return Response("", 404)
         auth = request.authorization
         if not auth or auth.username != _metrics_username() or not _metrics_verify(auth.password):
             return Response(

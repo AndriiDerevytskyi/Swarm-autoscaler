@@ -538,12 +538,13 @@ window.metricsEnable = async function () {
   try {
     const res = await api.metricsAuthEnable(u);
     if (res.ok) {
-      document.getElementById('metrics-creds').innerHTML =
+      _metricsAuth = { enabled: true, username: res.username };
+      renderPage();
+      const credsEl = document.getElementById('metrics-creds');
+      if (credsEl) credsEl.innerHTML =
         `<div style="color:var(--green);font-size:12px;margin-top:4px"><strong>Save these credentials — the password is shown only once:</strong></div>
          <div class="mono" style="margin-top:4px;font-size:12px">Username: ${esc(res.username)}</div>
          <div class="mono" style="font-size:12px">Password: <span style="color:var(--accent)">${esc(res.password)}</span></div>`;
-      _metricsAuth = { enabled: true, username: res.username };
-      renderPage();
     } else { toast(res.error || 'Failed', false); }
   } catch (e) { toast(`Error: ${e.message}`, false); }
 };
@@ -563,7 +564,8 @@ window.metricsRegen = async function () {
   try {
     const res = await api.metricsAuthRegenerate();
     if (res.ok) {
-      document.getElementById('metrics-creds').innerHTML =
+      const credsEl = document.getElementById('metrics-creds');
+      if (credsEl) credsEl.innerHTML =
         `<div style="color:var(--green);font-size:12px;margin-top:4px"><strong>New password — save it, shown only once:</strong></div>
          <div class="mono" style="margin-top:4px;font-size:12px">Username: ${esc(res.username)}</div>
          <div class="mono" style="font-size:12px">Password: <span style="color:var(--accent)">${esc(res.password)}</span></div>`;
