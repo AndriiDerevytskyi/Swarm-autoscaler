@@ -256,7 +256,7 @@ tr:hover td { background: rgba(128,128,128,0.06); }
 /* ── Service cards ── */
 .cards-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
   gap: 14px;
 }
 
@@ -391,6 +391,7 @@ tr:hover td { background: rgba(128,128,128,0.06); }
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
 .cooldown-txt {
@@ -409,7 +410,8 @@ tr:hover td { background: rgba(128,128,128,0.06); }
 .card-foot-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .scale-ctl label {
