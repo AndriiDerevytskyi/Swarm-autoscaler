@@ -2,7 +2,8 @@ services:
   autoscaler:
     image: &image ozzzyad/swarm-autoscaler:latest
     environment:
-      AUTOSCALER_LOG_LEVEL: "INFO"       # DEBUG | INFO | WARN | ERROR
+      AUTOSCALER_ROLE: "manager"          # manager | agent
+      AUTOSCALER_LOG_LEVEL: "INFO"        # DEBUG | INFO | WARN | ERROR
       AUTOSCALER_POLL_INTERVAL: "15"     # poll interval, seconds
       AUTOSCALER_WEB_PORT: "8080"        # web UI port
       # Default thresholds for services without explicit labels
@@ -43,7 +44,6 @@ services:
     environment:
       AUTOSCALER_ROLE: "agent"
       AUTOSCALER_MANAGER_URL: "http://autoscaler:8080"
-      AUTOSCALER_POLL_INTERVAL: "15"
       AUTOSCALER_LOG_LEVEL: "INFO"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

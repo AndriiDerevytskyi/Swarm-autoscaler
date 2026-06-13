@@ -72,6 +72,8 @@ def record_event(
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (service_name, action, from_replicas, to_replicas, reason, cpu_pct, mem_pct),
         )
+        conn.execute("DELETE FROM events WHERE timestamp < datetime('now', '-2 days')")
+        conn.execute("DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT 10000)")
         conn.commit()
 
 

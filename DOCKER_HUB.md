@@ -12,6 +12,8 @@ curl -O https://raw.githubusercontent.com/AndriiDerevytskyi/Swarm-autoscaler/ref
 docker stack deploy -c docker-compose.yml autoscaler
 ```
 
+Open `http://<manager-ip>:8080` — the web UI is initially unprotected. Set up credentials in **Settings → Security**.
+
 ---
 
 ## Example Stack: Manager + Agent
@@ -22,6 +24,7 @@ services:
   autoscaler:
     image: ozzzyad/swarm-autoscaler:latest
     environment:
+      AUTOSCALER_ROLE: "manager"
       AUTOSCALER_LOG_LEVEL: "INFO"
       AUTOSCALER_POLL_INTERVAL: "15"
     ports:
@@ -53,6 +56,8 @@ services:
       - autoscaler
     deploy:
       mode: global
+      placement:
+        constraints: [node.role == worker]
       resources:
         limits:   { memory: 64M, cpus: 0.2 }
         reservations: { memory: 32M, cpus: 0.05 }
@@ -63,7 +68,6 @@ networks:
   autoscaler:
     driver: overlay
     attachable: true
-    internal: true
 
 volumes:
   autoscaler_data:
@@ -77,8 +81,9 @@ Every `POLL_INTERVAL` seconds, the manager:
 3. If average CPU/RAM exceeds threshold → scale up (+1 replica, up to `max_replicas`)
 4. If within normal range and cooldown expired → scale down (-1 replica, down to `min_replicas`)
 
-Agents (`mode: global`, one per node) only collect `docker stats` and send to the manager.
-No web UI, no database.
+Agents (`mode: global`, one per worker node) only collect `docker stats` and send to the manager.
+They cache metrics locally when the manager is unreachable and batch-send on reconnect.
+No web UI, no database. Poll interval is received from the manager at bootstrap.
 
 ---
 
@@ -104,9 +109,9 @@ The service must also have `deploy.resources.limits` set — CPU/RAM percentages
 
 | Variable | Default | Role | Description |
 |-----------|:---:|:---:|---------|
-| `AUTOSCALER_ROLE` | `manager` | both | `manager` — full functionality, `agent` — metrics only |
+| `AUTOSCALER_ROLE` | `manager` | both | `manager` or `agent` |
 | `AUTOSCALER_LOG_LEVEL` | `INFO` | both | `DEBUG` / `INFO` / `WARN` / `ERROR` |
-| `AUTOSCALER_POLL_INTERVAL` | `15` | both | Poll interval, seconds |
+| `AUTOSCALER_POLL_INTERVAL` | `15` | manager | Poll interval (agents inherit from manager) |
 | `AUTOSCALER_WEB_PORT` | `8080` | manager | Web UI port |
 | `AUTOSCALER_MANAGER_URL` | `http://autoscaler:8080` | agent | Where to send metrics |
 | `AUTOSCALER_NODE_NAME` | hostname | agent | Node identifier in reports |
@@ -120,22 +125,24 @@ The service must also have `deploy.resources.limits` set — CPU/RAM percentages
 
 ## Authentication
 
-### Web UI
+### Web UI (session-based)
 
-The web UI starts unprotected. Set up credentials via **About → Security — Setup Authentication**.
-The password is stored as a PBKDF2 hash in SQLite. Use **Change Password** to update it.
+Starts unprotected. Set up credentials via **Settings → Security — Setup Authentication**.
+A login form appears after setup. Session stored in a secure cookie — no browser Basic Auth popup.
+Logout button in sidebar.
 
-### Prometheus Metrics
+### Prometheus Metrics (always requires auth)
 
-By default open. Go to **About → Prometheus Metrics** → "Enable Auth & Generate Password".
-The password is **shown once** — copy it for your Prometheus config.
-You can regenerate or disable at any time.
+`/api/metrics` always returns 401 until credentials are configured.
+Go to **Settings → Prometheus Metrics → Enable Auth & Generate Password**.
+The password is **shown once** — copy it for Prometheus. Regenerate or disable at any time.
 
-Example Prometheus scrape config:
+Example scrape config:
 
 ```yaml
 scrape_configs:
   - job_name: 'autoscaler'
+    metrics_path: '/api/metrics'
     basic_auth:
       username: prometheus
       password: <generated-password>
@@ -145,37 +152,23 @@ scrape_configs:
 
 ---
 
-## Web UI and API
+## Web UI
 
 After deployment: `http://<manager-ip>:8080`
 
 | Page | Features |
 |----------|-----------|
-| Dashboard | Stats, alerts, sortable table, search, JSON export |
-| Services | Service cards, sparklines, pause/resume with timeout, manual scale |
-| Events | Full scale event history with per-service filter |
-| About | Runtime parameters and label reference |
+| Login | Clean login form when auth is configured |
+| Dashboard | Stats, alerts, overloaded rows highlighted, sortable table, search, JSON export |
+| Services | Cards with sparklines, pause with timer & remaining time, manual scale with confirm |
+| Events | Scale/pause/resume history, per-service filter, clear buttons |
+| Settings | Version, runtime config, web UI & metrics auth management |
 
-Dark/light theme. Real-time updates via SSE.
+Dark/light theme. Real-time updates via SSE. Version from git tag in sidebar.
 
-### Prometheus
+### Prometheus Metrics
 
-Enable auth via **About → Prometheus Metrics → Enable Auth & Generate Password**.
-Use the generated password in your scrape config:
-
-```yaml
-scrape_configs:
-  - job_name: 'autoscaler'
-    scrape_interval: 15s
-    metrics_path: '/api/metrics'
-    basic_auth:
-      username: prometheus
-      password: <generated-password>
-    static_configs:
-      - targets: ['manager-ip:8080']
-```
-
-Metrics: `autoscaler_replicas`, `autoscaler_cpu_pct`, `autoscaler_mem_pct`, `autoscaler_cpu_threshold`, `autoscaler_ram_threshold`, `autoscaler_paused`, `autoscaler_docker_ok`.
+`autoscaler_replicas`, `autoscaler_cpu_pct`, `autoscaler_mem_pct`, `autoscaler_cpu_threshold`, `autoscaler_ram_threshold`, `autoscaler_paused`, `autoscaler_docker_ok`.
 
 Ready-to-import Grafana dashboard: [`grafana-dashboard.json`](grafana-dashboard.json).
 
@@ -192,8 +185,12 @@ Ready-to-import Grafana dashboard: [`grafana-dashboard.json`](grafana-dashboard.
 | `POST` | `/api/services/<n>/scale` | Manual scale `{"replicas": N}` |
 | `POST` | `/api/services/<n>/pause` | Pause `{"duration": 5}` (min) |
 | `POST` | `/api/services/<n>/resume` | Resume |
-| `GET` | `/api/metrics` | Prometheus |
+| `GET` | `/api/metrics` | Prometheus (always requires Basic Auth) |
 | `GET` | `/api/stream` | SSE real-time |
+| `POST` | `/api/auth/login` | Login (session-based) |
+| `POST` | `/api/auth/logout` | Logout |
+| `POST` | `/api/auth/setup` | Initial credentials |
+| `POST` | `/api/auth/change` | Change password |
 
 ### Examples
 
@@ -218,6 +215,8 @@ collects metrics directly:
 services:
   autoscaler:
     image: ozzzyad/swarm-autoscaler:latest
+    environment:
+      AUTOSCALER_ROLE: "manager"
     ports: ["8080:8080"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -235,3 +234,4 @@ volumes:
 - `docker stats` only sees containers on the local node — agents solve this by collecting metrics cluster-wide
 - Scaling step: 1 replica per cycle
 - The autoscaler never scales itself (services named `autoscaler*` are skipped)
+- Events auto-cleaned after 2 days, max 10000 stored

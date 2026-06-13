@@ -171,6 +171,7 @@ def _require_auth():
         return
 
     if request.path in ("/api/stream", "/api/health", "/api/agent/report",
+                         "/api/agent/report/batch",
                          "/api/agent/secret", "/api/agent/managed",
                          "/api/auth/status", "/api/auth/setup",
                          "/api/auth/login", "/api/auth/logout"):
@@ -369,16 +370,37 @@ def agent_report():
 
     data = request.get_json(silent=True) or {}
     try:
-        node         = data["node"]
-        service_name = data["service_name"]
-        cpu_pct      = float(data["cpu_pct"])
-        mem_pct      = float(data["mem_pct"])
-        replicas     = int(data["replicas"])
+        _store_report(data)
     except (KeyError, ValueError, TypeError):
         return jsonify({"ok": False, "error": "invalid payload"}), 400
-
-    record_node_metrics(node, service_name, cpu_pct, mem_pct, replicas)
     return jsonify({"ok": True})
+
+
+@app.post("/api/agent/report/batch")
+def agent_report_batch():
+    secret = _config.get("_agent_secret", "")
+    if secret:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {secret}":
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    reports = data.get("reports", [])
+    for r in reports:
+        try:
+            _store_report(r)
+        except Exception:
+            pass
+    return jsonify({"ok": True, "count": len(reports)})
+
+
+def _store_report(data: dict) -> None:
+    node         = data["node"]
+    service_name = data["service_name"]
+    cpu_pct      = float(data["cpu_pct"])
+    mem_pct      = float(data["mem_pct"])
+    replicas     = int(data["replicas"])
+    record_node_metrics(node, service_name, cpu_pct, mem_pct, replicas)
 
 
 @app.get("/api/agent/secret")
@@ -389,7 +411,10 @@ def agent_bootstrap():
     src = request.remote_addr or ""
     if not (src.startswith("10.") or src.startswith("172.") or src.startswith("192.168.") or src == "127.0.0.1"):
         return jsonify({"secret": None}), 403
-    return jsonify({"secret": secret})
+    return jsonify({
+        "secret":         secret,
+        "poll_interval":  int(_config.get("poll_interval", 15)),
+    })
 
 
 @app.get("/api/agent/managed")

@@ -14,11 +14,13 @@ from core.logging import log
 from core.stats import collect_stats
 
 MANAGER_URL = os.getenv("AUTOSCALER_MANAGER_URL", "http://autoscaler:8080")
-POLL_INTERVAL = int(os.getenv("AUTOSCALER_POLL_INTERVAL", "15"))
 NODE_NAME     = os.getenv("AUTOSCALER_NODE_NAME", socket.gethostname())
 
 _AGENT_SECRET       = ""
 _bootstrap_cooldown  = 0.0
+_poll_interval       = 15
+_cache               = []  # batched reports when manager unreachable
+_CACHE_MAX           = 300
 
 
 def _call_manager(path: str, timeout: int = 5):
@@ -36,7 +38,7 @@ def _call_manager(path: str, timeout: int = 5):
 
 
 def _bootstrap() -> bool:
-    global _AGENT_SECRET, _bootstrap_cooldown
+    global _AGENT_SECRET, _poll_interval, _bootstrap_cooldown
     now = time.time()
     if now < _bootstrap_cooldown:
         return bool(_AGENT_SECRET)
@@ -45,13 +47,18 @@ def _bootstrap() -> bool:
         data = _call_manager("/api/agent/secret")
         if data and data.get("secret"):
             _AGENT_SECRET = data["secret"]
+            _poll_interval = data.get("poll_interval", 15)
             _bootstrap_cooldown = 0
-            log.info("Agent secret bootstrapped from manager")
+            log.info("Agent secret bootstrapped from manager (poll=%ds)", _poll_interval)
             return True
         else:
             _bootstrap_cooldown = now + 60
             log.warning("Manager returned no secret – will retry in 60s")
             return False
+    except Exception as exc:
+        _bootstrap_cooldown = now + 10
+        log.warning("Failed to bootstrap agent secret: %s – will retry in 10s", exc)
+        return False
     except Exception as exc:
         _bootstrap_cooldown = now + 10  # short cooldown for connection/DNS errors
         log.warning("Failed to bootstrap agent secret: %s – will retry in 10s", exc)
@@ -103,7 +110,29 @@ def _report(service_name: str, replicas: int, cpu_pct: float, mem_pct: float) ->
         return "ok"
     except Exception as exc:
         log.debug("Failed to report to manager: %s", exc)
-        return "ok"
+        return "retry"
+
+
+def _flush_cache() -> bool:
+    global _cache
+    if not _cache:
+        return True
+    payload = json.dumps({"reports": _cache}).encode()
+    req = urllib.request.Request(
+        f"{MANAGER_URL}/api/agent/report/batch",
+        data=payload,
+        headers={
+            "Content-Type":  "application/json",
+            "Authorization": f"Bearer {_AGENT_SECRET}",
+        },
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        log.info("Flushed %d cached reports", len(_cache))
+        _cache = []
+        return True
+    except Exception:
+        return False
 
 
 def main():
@@ -147,9 +176,10 @@ def main():
         if not managed and not _AGENT_SECRET:
             _bootstrap()
             managed = _fetch_managed()
-            _shutdown.wait(timeout=POLL_INTERVAL)
+            _shutdown.wait(timeout=_poll_interval)
             continue
 
+        had_success = False
         for name in managed:
             try:
                 if name.startswith("autoscaler"):
@@ -169,7 +199,16 @@ def main():
                     elif result == "nokey":
                         need_bootstrap = True
                         continue
+                    elif result == "retry":
+                        if len(_cache) < _CACHE_MAX:
+                            _cache.append({
+                                "node": NODE_NAME, "service_name": name,
+                                "cpu_pct": round(stats["cpu_pct"], 1),
+                                "mem_pct": round(stats["mem_pct"], 1),
+                                "replicas": len(ctrs),
+                            })
                     else:
+                        had_success = True
                         log.debug("%s: reported cpu=%.1f%% mem=%.1f%% replicas=%d",
                                   name, stats["cpu_pct"], stats["mem_pct"], len(ctrs))
                 else:
@@ -178,6 +217,9 @@ def main():
             except Exception as exc:
                 log.error("Unexpected error processing service %s: %s", name, exc)
 
-        _shutdown.wait(timeout=POLL_INTERVAL)
+        if had_success:
+            _flush_cache()
+
+        _shutdown.wait(timeout=_poll_interval)
 
     log.info("Agent shutdown complete")

@@ -25,7 +25,7 @@ Every `AUTOSCALER_POLL_INTERVAL` seconds:
 
 ```
 swarm-autoscaler/
-├── main.py                   # entry point
+├── main.py                   # entry point (routes to manager or agent)
 ├── Dockerfile                # image build (with HEALTHCHECK)
 ├── DOCKER_HUB.md             # Docker Hub overview
 ├── .dockerignore
@@ -39,21 +39,21 @@ swarm-autoscaler/
 │   └── autoscaler.db         # SQLite (auto-created on first run)
 ├── core/
 │   ├── __init__.py
-│   ├── logging.py            # custom formatter, logger setup
+│   ├── logging.py            # JSON logger, werkzeug integration
 │   ├── config.py             # env vars, defaults, parse_config()
-│   ├── database.py           # SQLite connection, migrator, events/history/pause/meta
+│   ├── database.py           # SQLite connection, migrator, events/history/pause/auth/meta
 │   ├── stats.py              # CPU/RAM metrics via Docker API
 │   ├── engine.py             # main loop (manager)
-│   ├── agent.py              # lightweight metrics collector (agent)
+│   ├── agent.py              # lightweight metrics collector with batch caching (agent)
 │   └── migrations/
 │       ├── __init__.py
 │       ├── 001_initial.sql   # tables: events, replica_history, paused_services
 │       ├── 002_pause_timeout.sql  # resume_after column
 │       ├── 003_node_metrics.sql   # agent reports table
-│       ├── 004_meta.sql           # key-value store (secrets)
+│       ├── 004_meta.sql           # key-value store (secrets, metrics auth)
 │       └── 005_auth.sql           # users table for web UI auth
 └── web/
-    ├── server.py             # Flask REST API + SSE
+    ├── server.py             # Flask REST API + SSE + session auth
     ├── static/
     │   ├── style.css         # dark/light theme
     │   └── app.js            # SPA (zero external dependencies)
@@ -93,11 +93,11 @@ decisions, serves the web UI, SSE, Prometheus metrics, and SQLite database.
 └─────────────────────────────────────────────────┘
 ```
 
-### Agent (global)
+### Agent (global, workers only)
 
-One instance per node (`mode: global`). Only collects `docker stats`
+One instance per worker node (`mode: global`). Only collects `docker stats`
 and sends reports to the manager. No web UI, no database, no decision-making.
-Minimal resource footprint (64 MB RAM, 0.2 CPU).
+Minimal resource footprint (64 MB RAM, 0.2 CPU). Uses batch caching when manager is unreachable.
 
 ```
 ┌─ Worker 1 ─────┐ ┌─ Worker 2 ─────┐ ┌─ Worker 3 ─────┐
@@ -118,9 +118,10 @@ Minimal resource footprint (64 MB RAM, 0.2 CPU).
 |-----------|:---:|:---:|---------|
 | `AUTOSCALER_ROLE` | `manager` | `agent` | Operating mode |
 | `AUTOSCALER_MANAGER_URL` | — | `http://autoscaler:8080` | Manager URL for sending metrics |
+| `AUTOSCALER_NODE_NAME` | — | hostname | Node identifier in reports |
 
-The agent can be deployed globally via docker-compose (`mode: global`) or manually
-on each node as a standalone container.
+The agent receives `poll_interval` from the manager during bootstrap — no need to configure it separately.
+Agents are placed on worker nodes only (manager collects its own metrics).
 
 ### docker-compose.yml
 
@@ -128,6 +129,8 @@ on each node as a standalone container.
 services:
   autoscaler:
     image: ozzzyad/swarm-autoscaler:latest
+    environment:
+      AUTOSCALER_ROLE: "manager"
     deploy:
       placement: [node.role == manager]
 
@@ -139,6 +142,8 @@ services:
     volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
     deploy:
       mode: global
+      placement:
+        constraints: [node.role == worker]
 ```
 
 ---
@@ -184,37 +189,39 @@ services:
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|-----------|:---:|---------|
-| `AUTOSCALER_LOG_LEVEL` | `INFO` | Log level: `DEBUG` / `INFO` / `WARN` / `ERROR` |
-| `AUTOSCALER_POLL_INTERVAL` | `15` | Service poll interval, seconds |
-| `AUTOSCALER_WEB_PORT` | `8080` | Web UI port |
-| `AUTOSCALER_DEFAULT_MIN_REPLICAS` | `1` | Default min replicas |
-| `AUTOSCALER_DEFAULT_MAX_REPLICAS` | `5` | Default max replicas |
-| `AUTOSCALER_DEFAULT_CPU_THRESHOLD` | `80` | Default CPU threshold, % |
-| `AUTOSCALER_DEFAULT_RAM_THRESHOLD` | `80` | Default RAM threshold, % |
-| `AUTOSCALER_DEFAULT_COOLDOWN` | `5` | Default cooldown, minutes |
+| Variable | Default | Role | Description |
+|-----------|:---:|:---:|---------|
+| `AUTOSCALER_ROLE` | `manager` | both | `manager` or `agent` |
+| `AUTOSCALER_LOG_LEVEL` | `INFO` | both | `DEBUG` / `INFO` / `WARN` / `ERROR` |
+| `AUTOSCALER_POLL_INTERVAL` | `15` | manager | Poll interval, seconds (agents inherit from manager) |
+| `AUTOSCALER_WEB_PORT` | `8080` | manager | Web UI port |
+| `AUTOSCALER_MANAGER_URL` | `http://autoscaler:8080` | agent | Where to send metrics |
+| `AUTOSCALER_NODE_NAME` | hostname | agent | Node identifier in reports |
+| `AUTOSCALER_DEFAULT_MIN_REPLICAS` | `1` | manager | Default min replicas |
+| `AUTOSCALER_DEFAULT_MAX_REPLICAS` | `5` | manager | Default max replicas |
+| `AUTOSCALER_DEFAULT_CPU_THRESHOLD` | `80` | manager | Default CPU threshold, % |
+| `AUTOSCALER_DEFAULT_RAM_THRESHOLD` | `80` | manager | Default RAM threshold, % |
+| `AUTOSCALER_DEFAULT_COOLDOWN` | `5` | manager | Default cooldown, minutes |
 
 ---
 
 ## Authentication
 
-### Web UI
+### Web UI (session-based)
 
-Initially the web UI is **unprotected**. To set up authentication, go to the **About** page
-and fill in the "Security — Setup Authentication" form with a username and password.
-The password hash is stored in SQLite. To change the password later, use the
-"Change Password" form on the same page.
+Initially the web UI is **unprotected** — the login page appears but anyone can access the API.
+Go to **Settings → Security — Setup Authentication** to create a username and password.
+After setup, a login form appears. Authenticated sessions are stored in a secure cookie.
+Use **Change Password** to update credentials. Logout is available in the sidebar.
 
-### Prometheus Metrics
+### Prometheus Metrics (always requires auth)
 
-By default `/api/metrics` is open. Go to **About → Prometheus Metrics** and click
-"Enable Auth & Generate Password". The generated password is **shown once** — save it
-for your Prometheus config.
+`/api/metrics` **always requires Basic Auth** — even before credentials are configured,
+the endpoint returns 401. Go to **Settings → Prometheus Metrics → Enable Auth & Generate Password**.
+The generated password is **shown once** — save it for your Prometheus config.
+You can regenerate the password or disable auth at any time.
 
-You can regenerate the password or disable auth at any time from the same section.
-
-Example Prometheus scrape config with auth:
+Example Prometheus scrape config:
 
 ```yaml
 scrape_configs:
@@ -244,7 +251,7 @@ docker stack services autoscaler
 docker service logs -f autoscaler_autoscaler
 ```
 
-On successful startup you will see (logs are JSON):
+On successful startup (logs are JSON):
 
 ```json
 {"time": "2026-06-10T18:00:00Z", "level": "INFO", "message": "Docker socket /var/run/docker.sock  [OK, rw]"}
@@ -258,29 +265,32 @@ On successful startup you will see (logs are JSON):
 
 `http://<swarm-node-ip>:8080`
 
+### Login
+When authentication is configured, a login form is shown. Session-based — no browser Basic Auth popup.
+
 ### Dashboard
 Summary stats: service count, total replicas, services at max/in cooldown.
 Alert panel for overloaded and paused services.
-Sortable table with search/filter by name. JSON export.
+Sortable table with search/filter, overloaded rows highlighted in red. JSON export.
 
 ### Services
 Service cards: replica dots, replica history sparkline for the last hour,
-CPU/RAM progress bars with threshold markers, cooldown timer.
-**Pause** with timeout selector (5/10/15/30 min or indefinitely) / **Resume**.
-Manual replica control with min/max validation.
+CPU/RAM progress bars with threshold markers, cooldown timer, pause remaining time.
+**Pause** with timeout selector (5/10/15/30 min or indefinitely) / **Unpause**.
+Manual replica control with confirmation dialog and min/max validation.
 
 ### Events
-Chronological log of all scaling events, filterable by service.
-Data stored in SQLite, persists across restarts.
+Chronological log of all scale/pause/resume events, filterable by service.
+Data stored in SQLite, auto-cleaned after 2 days, limited to 10000 rows.
 Clear events button (all or per-service).
 
-### About
-Runtime parameters, label reference, and security: set up web UI authentication,
-enable/disable Prometheus metrics auth with auto-generated passwords.
+### Settings
+Runtime parameters (version, log level, poll interval), label reference, and security:
+set up web UI authentication, enable/disable Prometheus metrics auth with auto-generated passwords.
 
 > Zero external CDN dependencies, fully offline-capable. Data updates in real time
 > via **Server-Sent Events (SSE)** — no periodic polling.
-> Dark/light theme, preference saved in localStorage.
+> Dark/light theme, preference saved in localStorage. Version from git tag shown in sidebar.
 
 ---
 
@@ -289,25 +299,29 @@ enable/disable Prometheus metrics auth with auto-generated passwords.
 | Method | Path | Description | Auth |
 |-------|------|---------|:---:|
 | `GET` | `/api/health` | Docker API connection status | — |
-| `GET` | `/api/services` | List of managed services | Basic |
-| `GET` | `/api/config` | Runtime configuration | Basic |
-| `GET` | `/api/events?limit=50&service=` | Event history | Basic |
-| `DELETE` | `/api/events?service=` | Clear events (all or per-service) | Basic |
-| `POST` | `/api/services/<name>/scale` | Set replicas `{"replicas": N}` | Basic |
-| `POST` | `/api/services/<name>/pause` | Pause `{"duration": 5}` (min, 0=forever) | Basic |
-| `POST` | `/api/services/<name>/resume` | Resume autoscaling | Basic |
-| `GET` | `/api/auth/status` | Check if web UI auth is configured | — |
-| `POST` | `/api/auth/setup` | Set up credentials (first time only) | — |
-| `POST` | `/api/auth/change` | Change password | Basic |
-| `GET` | `/api/metrics/auth/status` | Metrics auth state | Basic |
-| `POST` | `/api/metrics/auth/enable` | Enable + generate password | Basic |
-| `POST` | `/api/metrics/auth/disable` | Disable metrics auth | Basic |
-| `POST` | `/api/metrics/auth/regenerate` | Regenerate metrics password | Basic |
-| `GET` | `/api/services/<name>/history?minutes=60` | Replica history for sparklines | Basic |
+| `GET` | `/api/services` | List of managed services | Session |
+| `GET` | `/api/config` | Runtime configuration + version | Session |
+| `GET` | `/api/events?limit=50&service=` | Event history | Session |
+| `DELETE` | `/api/events?service=` | Clear events (all or per-service) | Session |
+| `POST` | `/api/services/<name>/scale` | Set replicas `{"replicas": N}` | Session |
+| `POST` | `/api/services/<name>/pause` | Pause `{"duration": 5}` (min, 0=forever) | Session |
+| `POST` | `/api/services/<name>/resume` | Resume autoscaling | Session |
+| `GET` | `/api/services/<name>/history?minutes=60` | Replica history for sparklines | Session |
 | `GET` | `/api/stream` | SSE real-time stream | — |
-| `GET` | `/api/metrics` | Prometheus metrics | Metrics |
-| `POST` | `/api/agent/report` | Receive agent metrics | Agent secret |
-| `GET` | `/api/agent/secret` | Bootstrap: agent secret retrieval | Overlay IP |
+| `GET` | `/api/metrics` | Prometheus metrics | Basic (always) |
+| `POST` | `/api/agent/report` | Single agent report | Agent secret |
+| `POST` | `/api/agent/report/batch` | Batch agent reports | Agent secret |
+| `GET` | `/api/agent/secret` | Bootstrap: secret + poll interval | Overlay IP |
+| `GET` | `/api/agent/managed` | List of managed service names | Agent secret |
+| `GET` | `/api/auth/status` | Auth configured + session status | — |
+| `POST` | `/api/auth/setup` | Initial credentials setup | — |
+| `POST` | `/api/auth/login` | Login, creates session | — |
+| `POST` | `/api/auth/logout` | Logout, clears session | — |
+| `POST` | `/api/auth/change` | Change password | Session |
+| `GET` | `/api/metrics/auth/status` | Metrics auth state | Session |
+| `POST` | `/api/metrics/auth/enable` | Enable + generate password | Session |
+| `POST` | `/api/metrics/auth/disable` | Disable metrics auth | Session |
+| `POST` | `/api/metrics/auth/regenerate` | Regenerate metrics password | Session |
 
 Examples:
 
@@ -335,19 +349,7 @@ Copy `prometheus.yml.example` into your Prometheus config. Supported discovery m
 - **dns_sd_configs** — Swarm with multiple replicas
 - **file_sd_configs** — dynamic targets
 
-Sample Prometheus scrape config (use the password generated in the About page):
-
-```yaml
-scrape_configs:
-  - job_name: 'autoscaler'
-    scrape_interval: 15s
-    metrics_path: '/api/metrics'
-    basic_auth:
-      username: prometheus
-      password: <generated-password>
-    static_configs:
-      - targets: ['swarm-manager:8080']
-```
+Metrics always require Basic Auth. Generate credentials in **Settings → Prometheus Metrics**.
 
 ### Metrics
 
@@ -383,14 +385,15 @@ All logs are JSON with fields `time`, `level`, `message`.
 |---------|-----------|
 | `ERROR` | Docker API errors, loop exceptions |
 | `WARN` | Missing labels, service at max capacity, stats read errors |
-| `INFO` | Startup, scale up/down events, pause expiration |
+| `INFO` | Startup, scale up/down events, pause/resume events, pause expiration |
 | `DEBUG` | Per-container stats on every tick, skipped services |
 
 ---
 
 ## Limitations
 
-- **Container visibility**: `docker stats` only sees containers on the local node. The `agent` mode (global) solves this — one agent per node, manager aggregates metrics cluster-wide.
+- **Container visibility**: `docker stats` only sees containers on the local node. Agents (one per worker node) solve this — manager aggregates metrics cluster-wide.
 - **Scaling step**: exactly 1 replica per cycle. Under sudden load spikes, scaling happens in steps across cycles.
 - **Cooldown**: after any scale event, a timer starts that blocks scale-down for the full duration.
 - **Autoscaler never scales itself**: services named `autoscaler*` are skipped.
+- **Event retention**: events older than 2 days are auto-deleted; max 10000 events stored.

@@ -399,6 +399,7 @@ window.applyScale = async function (name) {
   const inp = document.getElementById(`inp-${name}`);
   const n   = parseInt(inp?.value, 10);
   if (!inp || isNaN(n) || n < 0) { toast('Invalid replica count', false); return; }
+  if (!confirm(`Set ${name} to ${n} replicas?`)) return;
   try {
     const res = await api.scale(name, n);
     if (res.ok) {
@@ -628,11 +629,14 @@ function pageDashboard() {
 
   const rows = sorted.map(s => {
     const st = svcStatus(s);
-    return `<tr>
+    const cpuOver = (s.cpu_pct ?? 0) >= s.cpu_threshold;
+    const memOver = (s.mem_pct ?? 0) >= s.ram_threshold;
+    const rowCls = (cpuOver || memOver) ? ' class="row-overloaded"' : '';
+    return `<tr${rowCls}>
       <td class="mono">${esc(s.name)}</td>
       <td>${s.replicas} <span class="muted">/ ${s.min_replicas}–${s.max_replicas}</span></td>
-      <td>${(s.cpu_pct ?? 0).toFixed(1)}% <span class="muted">/ ${s.cpu_threshold}%</span></td>
-      <td>${(s.mem_pct ?? 0).toFixed(1)}% <span class="muted">/ ${s.ram_threshold}%</span></td>
+      <td><span class="${cpuOver ? 'c-red' : ''}">${(s.cpu_pct ?? 0).toFixed(1)}%</span> <span class="muted">/ ${s.cpu_threshold}%</span></td>
+      <td><span class="${memOver ? 'c-red' : ''}">${(s.mem_pct ?? 0).toFixed(1)}%</span> <span class="muted">/ ${s.ram_threshold}%</span></td>
       <td><span class="badge ${st.cls}">${st.label}</span></td>
     </tr>`;
   }).join('');
@@ -803,6 +807,7 @@ function pageSettings() {
   ${metricsSection}
   <div class="info-block">
     <div class="info-head">Runtime configuration</div>
+    ${row('Version',               _cfg.version || 'dev')}
     ${row('AUTOSCALER_LOG_LEVEL',    _cfg.log_level    ?? '—')}
     ${row('AUTOSCALER_POLL_INTERVAL', (_cfg.poll_interval ?? '—') + 's')}
     ${row('AUTOSCALER_WEB_PORT',     _cfg.web_port     ?? '—')}

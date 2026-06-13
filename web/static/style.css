@@ -234,6 +234,11 @@ tr:hover td { background: rgba(128,128,128,0.06); }
 
 .muted { color: var(--text-3); }
 
+.c-red { color: var(--red); font-weight: 600; }
+
+.row-overloaded td { background: var(--red-dim); }
+.row-overloaded:hover td { background: rgba(248, 81, 73, 0.18); }
+
 /* ── Badge ── */
 .badge {
   display: inline-block;

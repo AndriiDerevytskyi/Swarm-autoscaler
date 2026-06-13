@@ -52,7 +52,6 @@ services:
     environment:
       AUTOSCALER_ROLE: "agent"
       AUTOSCALER_MANAGER_URL: "http://autoscaler:8080"
-      AUTOSCALER_POLL_INTERVAL: "15"
       AUTOSCALER_LOG_LEVEL: "INFO"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
