@@ -1,7 +1,9 @@
+import math
 import os
 import secrets
 import signal
 import threading
+from collections import deque
 from datetime import datetime, timedelta
 from typing import Dict, Set
 
@@ -128,6 +130,9 @@ def main() -> None:
     last_scale:  Dict[str, datetime] = {}
     warned:      Set[tuple]          = set()
     warned_limits: Set[str]          = set()
+    cpu_history: Dict[str, deque]    = {}
+    mem_history: Dict[str, deque]    = {}
+    STABILIZATION_WINDOW = 3  # number of cycles to hold metrics for stabilization
 
     while not _shutdown.is_set():
         try:
@@ -197,6 +202,13 @@ def main() -> None:
                                   name, replicas)
                         alerts.append("No containers visible on any node")
                     else:
+                        # record metrics for stabilization window
+                        if name not in cpu_history:
+                            cpu_history[name] = deque(maxlen=STABILIZATION_WINDOW)
+                            mem_history[name] = deque(maxlen=STABILIZATION_WINDOW)
+                        cpu_history[name].append(cpu)
+                        mem_history[name].append(mem)
+
                         log.debug(
                             "%s  replicas=%d  avg cpu=%.1f%%  avg mem=%.1f%%  "
                             "(thresholds cpu>%.0f%%  mem>%.0f%%  cooldown=%dmin)",
@@ -208,8 +220,14 @@ def main() -> None:
 
                         if overloaded:
                             if replicas < cfg["max_replicas"]:
-                                new = replicas + 1
-                                reason = f"cpu={cpu:.1f}% mem={mem:.1f}%"
+                                # proportional scale-up (HPA-like): desired = ceil(replicas * max(cpu/threshold, mem/threshold))
+                                ratio = max(
+                                    cpu / cfg["cpu_threshold"] if cfg["cpu_threshold"] > 0 else 1,
+                                    mem / cfg["ram_threshold"] if cfg["ram_threshold"] > 0 else 1,
+                                )
+                                desired = math.ceil(replicas * ratio)
+                                new = min(max(replicas + 1, desired), cfg["max_replicas"])
+                                reason = f"cpu={cpu:.1f}% mem={mem:.1f}% ratio={ratio:.2f}"
                                 log.info("%s: SCALE UP  %d -> %d  (%s)",
                                          name, replicas, new, reason)
                                 svc.scale(new)
@@ -218,6 +236,9 @@ def main() -> None:
                                 last_action[name] = "up"
                                 last_scale[name]  = datetime.now()
                                 cooldown[name]    = datetime.now() + timedelta(minutes=cfg["cooldown_minutes"])
+                                # reset history after scale
+                                cpu_history[name].clear()
+                                mem_history[name].clear()
                             else:
                                 alerts.append(f"Overloaded at max ({cfg['max_replicas']} replicas)")
                                 log.warning(
@@ -228,16 +249,25 @@ def main() -> None:
                         else:
                             gate = cooldown.get(name, datetime.min)
                             if datetime.now() >= gate and replicas > cfg["min_replicas"]:
-                                new = replicas - 1
-                                reason = f"cpu={cpu:.1f}% mem={mem:.1f}% cooldown passed"
-                                log.info("%s: SCALE DOWN  %d -> %d  (%s)",
-                                         name, replicas, new, reason)
-                                svc.scale(new)
-                                record_event(name, "down", replicas, new, reason, cpu, mem)
-                                replicas = new
-                                last_action[name] = "down"
-                                last_scale[name]  = datetime.now()
-                                cooldown[name]    = datetime.now() + timedelta(minutes=cfg["cooldown_minutes"])
+                                # stabilization check: only scale down if max over window is below threshold
+                                max_cpu = max(cpu_history[name]) if cpu_history.get(name) else cpu
+                                max_mem = max(mem_history[name]) if mem_history.get(name) else mem
+                                if max_cpu < cfg["cpu_threshold"] and max_mem < cfg["ram_threshold"]:
+                                    new = replicas - 1
+                                    reason = f"cpu={cpu:.1f}% mem={mem:.1f}% (window max cpu={max_cpu:.1f}% mem={max_mem:.1f}%)"
+                                    log.info("%s: SCALE DOWN  %d -> %d  (%s)",
+                                             name, replicas, new, reason)
+                                    svc.scale(new)
+                                    record_event(name, "down", replicas, new, reason, cpu, mem)
+                                    replicas = new
+                                    last_action[name] = "down"
+                                    last_scale[name]  = datetime.now()
+                                    cooldown[name]    = datetime.now() + timedelta(minutes=cfg["cooldown_minutes"])
+                                    cpu_history[name].clear()
+                                    mem_history[name].clear()
+                                else:
+                                    log.debug("%s: scale-down blocked by stabilization window "
+                                              "(max cpu=%.1f%% mem=%.1f%%)", name, max_cpu, max_mem)
 
                 history = get_replica_history(name, 60)
 
@@ -266,6 +296,8 @@ def main() -> None:
 
         for gone in web.managed_names() - managed:
             web.remove_service(gone)
+            cpu_history.pop(gone, None)
+            mem_history.pop(gone, None)
 
         web.broadcast_sse()
 

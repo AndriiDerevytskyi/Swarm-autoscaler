@@ -14,8 +14,8 @@ Every `AUTOSCALER_POLL_INTERVAL` seconds:
 1. **Manager** discovers all services labeled `swarm.autoscaler.enable=true`
 2. **Agent** (one per node) collects `docker stats` and sends them to the manager
 3. Manager aggregates its own metrics + agent reports → average across all nodes
-4. If average usage exceeds threshold → scale up by 1 replica (up to `max_replicas`)
-5. If usage is normal and cooldown has expired → scale down by 1 replica (down to `min_replicas`)
+4. If average usage exceeds threshold → **proportional scale up** (HPA-like formula): `desired = ceil(replicas × max(cpu/threshold, mem/threshold))`, clamped to `max_replicas`
+5. If usage is normal and cooldown has expired → scale down by 1 replica (down to `min_replicas`), with a **stabilization window** check (max over last 3 cycles must be below threshold)
 6. After each scaling event, a cooldown timer starts and the event is recorded in SQLite
 7. Updates are streamed to clients in real time via SSE
 
@@ -184,6 +184,8 @@ services:
 > **Resource limits are required:** if a service has the autoscaler label but no
 > `deploy.resources.limits` (CPU or memory), it is skipped with a warning — CPU/RAM
 > percentages are meaningless without limits.
+> **Threshold tolerance:** comparison is strict (`>=`). Set thresholds ~10% below your
+> actual limit to avoid scaling on every minor spike (e.g., threshold 70 for an 80% limit).
 
 ---
 
@@ -393,7 +395,7 @@ All logs are JSON with fields `time`, `level`, `message`.
 ## Limitations
 
 - **Container visibility**: `docker stats` only sees containers on the local node. Agents (one per worker node) solve this — manager aggregates metrics cluster-wide.
-- **Scaling step**: exactly 1 replica per cycle. Under sudden load spikes, scaling happens in steps across cycles.
+- **Scaling step**: scale-up is proportional (`ceil(replicas × overload_ratio)`, at least +1). Scale-down is always 1 replica at a time with a stabilization window (max over last 3 cycles must be below threshold).
 - **Cooldown**: after any scale event, a timer starts that blocks scale-down for the full duration.
 - **Autoscaler never scales itself**: services named `autoscaler*` are skipped.
 - **Event retention**: events older than 2 days are auto-deleted; max 10000 events stored.
